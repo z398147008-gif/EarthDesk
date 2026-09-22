@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>地球桌面 性能</title>
+<link rel="stylesheet" href="shared.css" />
+<link rel="stylesheet" href="perf.css" />
+</head>
+<body>
+  <div class="surface"></div>
+
+  <article class="card" id="card">
+    <header class="head">
+      <div class="machine" id="machine">本机</div>
+      <div class="uptime" id="uptime"></div>
+    </header>
+
+    <section class="rings" id="rings"></section>
+
+    <section class="rows" id="disks"></section>
+
+    <section class="rows" id="sensors"></section>
+
+    <footer class="note" id="note"></footer>
+  </article>
+
+  <div class="resize-handle"></div>
+  <script type="module" src="widget.js"></script>
+  <script type="module" src="perf.js"></script>
+</body>
+</html>

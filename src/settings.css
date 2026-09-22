@@ -1,0 +1,187 @@
+/* A plain settings page in the grouped-list style: rounded cards, one row
+   per switch, sub-options indented under their parent and greyed out while
+   the parent is off. Light and dark follow the system theme. */
+
+:root {
+  --bg: #f2f2f7;
+  --card: #ffffff;
+  --ink: #1c1c1e;
+  --ink-2: #6e6e73;
+  --line: rgba(60, 60, 67, 0.14);
+  --track: #e5e5ea;
+  --on: #34c759;
+  --accent: #0a84ff;
+  --seg-bg: #e9e9ee;
+  --seg-on: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1e;
+    --card: #2c2c2e;
+    --ink: #f2f2f7;
+    --ink-2: #98989f;
+    --line: rgba(84, 84, 88, 0.55);
+    --track: #3a3a3c;
+    --on: #30d158;
+    --accent: #0a84ff;
+    --seg-bg: #3a3a3c;
+    --seg-on: #636366;
+  }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: var(--bg); color: var(--ink); }
+body {
+  font: 14px/1.4 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+main { max-width: 620px; margin: 0 auto; padding: 28px 24px 40px; }
+h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.01em; }
+.lede { color: var(--ink-2); margin: 4px 0 18px; }
+
+.group { margin-top: 22px; }
+.group h2 {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-2);
+  margin: 0 14px 6px;
+}
+.card {
+  background: var(--card);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 52px;
+  padding: 10px 16px;
+  position: relative;
+}
+.row + .row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 0;
+  border-top: 1px solid var(--line);
+}
+.row.child { padding-left: 34px; }
+.row.child + .row::before, .row + .row.child::before { left: 34px; }
+.row.parent .title { font-weight: 600; font-size: 15px; }
+.text { min-width: 0; }
+.title { font-size: 14px; }
+.desc { color: var(--ink-2); font-size: 12.5px; margin-top: 1px; }
+
+.row.child.disabled { opacity: 0.4; pointer-events: none; }
+
+/* iOS-style switch */
+.switch { position: relative; flex: none; width: 51px; height: 31px; }
+.switch input { position: absolute; inset: 0; opacity: 0; cursor: pointer; margin: 0; }
+.switch .knob {
+  position: absolute;
+  inset: 0;
+  border-radius: 31px;
+  background: var(--track);
+  transition: background 180ms ease;
+  pointer-events: none;
+}
+.switch .knob::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 1px 1px rgba(0, 0, 0, 0.16);
+  transition: transform 200ms cubic-bezier(0.3, 0.7, 0.4, 1);
+}
+.switch input:checked + .knob { background: var(--on); }
+.switch input:checked + .knob::after { transform: translateX(20px); }
+.switch input:focus-visible + .knob { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.segmented {
+  display: flex;
+  flex: none;
+  background: var(--seg-bg);
+  border-radius: 9px;
+  padding: 2px;
+}
+.segmented button {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.segmented button.on {
+  background: var(--seg-on);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  font-weight: 600;
+}
+
+.slider { display: flex; align-items: center; gap: 10px; flex: none; }
+.slider input { width: 150px; accent-color: var(--accent); }
+.slider output { width: 44px; text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+.button {
+  flex: none;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  cursor: pointer;
+}
+.button:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.button.active { background: var(--accent); color: #fff; }
+
+/* location picker */
+.row.picker { gap: 8px; }
+.picker select {
+  flex: 1 1 0;
+  min-width: 0;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+  background: var(--seg-bg);
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 8px;
+  cursor: pointer;
+}
+.picker select:disabled { opacity: 0.5; cursor: default; }
+.button:disabled { opacity: 0.45; cursor: default; }
+.button:disabled:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* hardware monitor status + guide */
+.badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  vertical-align: 1px;
+  background: var(--track);
+  color: var(--ink-2);
+}
+.badge.ok { background: color-mix(in srgb, var(--on) 22%, transparent); color: var(--on); }
+.badge.bad { background: color-mix(in srgb, #ff9f0a 22%, transparent); color: #ff9f0a; }
+details.guide { display: block; padding-top: 12px; padding-bottom: 14px; }
+details.guide summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+details.guide ol { margin: 10px 0 0 18px; color: var(--ink); font-size: 13px; line-height: 1.6; }
+details.guide ol > li { margin-top: 6px; }
+details.guide ul { margin: 4px 0 0 16px; color: var(--ink-2); }
+details.guide a { color: var(--accent); }
+.foot { margin-top: 26px; text-align: center; color: var(--ink-2); font-size: 11.5px; }

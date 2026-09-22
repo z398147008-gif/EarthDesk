@@ -1,0 +1,183 @@
+/* Modelled on the system weather widget: a tinted rounded card, the current
+   reading at the top, an hour strip starting at "now", then one row per day
+   with a temperature-range bar. All sizes are rem, so the card scales as one
+   piece when resized (see widget.js). */
+
+.card {
+  position: absolute;
+  inset: 0;
+  border-radius: 1.45rem;
+  padding: 1.05rem 1.15rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  color: #fff;
+  overflow: hidden;
+  font-family: "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", "Yu Gothic UI", system-ui, sans-serif;
+  /* No outer shadow: the card fills its window, so a shadow would be cut off
+     at the window edge and show up as grey wedges outside the round corners. */
+  text-shadow: 0 0.05rem 0.25rem rgba(0, 0, 0, calc(0.45 - var(--card-alpha) * 0.3));
+}
+
+/* Everything behind the text lives in .bg, and the settings page's opacity
+   slider fades exactly this layer. */
+.bg {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  opacity: var(--card-alpha);
+  transition: background 600ms ease;
+}
+.sky { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+/* A slightly deeper tone under the hour strip and the day list, the way the
+   iOS app sets its panels over the animated sky. */
+.veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg,
+    rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0) 26%,
+    rgba(10, 16, 30, 0.16) 40%, rgba(10, 16, 30, 0.24) 100%);
+}
+.card > *:not(.bg) { position: relative; z-index: 1; }
+
+/* The glass look without real blur: a translucent tint, a faint top sheen and
+   a hairline inner border. Over the black of space and the blue of the planet
+   that is what a blurred backdrop comes out as anyway. */
+.card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0) 38%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.10);
+  opacity: var(--card-alpha);
+  z-index: 2;
+}
+
+/* Fallback tints, only visible if WebGL is unavailable. */
+.tone-clear .bg    { background: linear-gradient(180deg, rgba(48, 120, 205, 0.86), rgba(84, 152, 222, 0.86)); }
+.tone-cloudy .bg   { background: linear-gradient(180deg, rgba(104, 128, 152, 0.86), rgba(124, 146, 168, 0.86)); }
+.tone-rain .bg     { background: linear-gradient(180deg, rgba(70, 86, 108, 0.88), rgba(92, 108, 128, 0.88)); }
+.tone-night-clear .bg  { background: linear-gradient(180deg, rgba(14, 24, 58, 0.88), rgba(34, 48, 92, 0.88)); }
+.tone-night-cloudy .bg { background: linear-gradient(180deg, rgba(38, 46, 66, 0.88), rgba(56, 64, 86, 0.88)); }
+
+/* --- header --------------------------------------------------------------- */
+.head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.place {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.arrow { width: 0.72rem; height: 0.72rem; fill: #fff; }
+.now-temp {
+  font-size: 3.1rem;
+  font-weight: 300;
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+  margin-top: 0.1rem;
+}
+.now-temp .deg { font-weight: 200; }
+
+.head-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+}
+.now-icon { width: 1.7rem; height: 1.7rem; margin: -0.2rem -0.2rem 0 0; }
+.cond { font-size: 0.86rem; font-weight: 600; margin-top: 0.05rem; }
+.hilo { font-size: 0.86rem; font-weight: 500; margin-top: 0.12rem; white-space: nowrap; }
+.hilo b { font-weight: 600; }
+
+/* --- hours ---------------------------------------------------------------- */
+.hours {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  margin-top: 0.7rem;
+  padding: 0.62rem 0 0.62rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.22);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+}
+.hour {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.24rem;
+  min-width: 0;
+}
+.hour .t { font-size: 0.74rem; font-weight: 600; opacity: 0.72; white-space: nowrap; }
+.hour.now .t { opacity: 1; }
+.hour img { width: 1.85rem; height: 1.85rem; }
+.hour .v { font-size: 0.94rem; font-weight: 600; }
+.hour.event .v { font-size: 0.74rem; font-weight: 600; opacity: 0.9; }
+
+/* --- days ----------------------------------------------------------------- */
+.days {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  padding-top: 0.25rem;
+}
+.day {
+  display: grid;
+  grid-template-columns: 2.6rem 1.9rem 2.2rem 1fr 2.2rem;
+  align-items: center;
+  column-gap: 0.4rem;
+  font-size: 0.94rem;
+  font-weight: 600;
+}
+.day .dow { white-space: nowrap; }
+.day img { width: 1.7rem; height: 1.7rem; }
+.day .pop {
+  display: block;
+  font-size: 0.62rem;
+  line-height: 1;
+  color: #7cd1ff;
+  text-align: center;
+  margin-top: -0.12rem;
+}
+.day .icon-cell { display: flex; flex-direction: column; align-items: center; }
+.day .lo { text-align: right; opacity: 0.62; }
+.day .hi { text-align: right; }
+
+.range {
+  position: relative;
+  height: 0.28rem;
+  border-radius: 0.14rem;
+  background: rgba(0, 0, 0, 0.16);
+}
+.range .fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 0.14rem;
+}
+.range .dot {
+  position: absolute;
+  top: 50%;
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 0.12rem rgba(0, 0, 0, 0.25);
+  transform: translate(-50%, -50%);
+}
+
+.status {
+  font-size: 0.66rem;
+  opacity: 0.75;
+  min-height: 0;
+  text-align: right;
+}
+.status:empty { display: none; }
+
+body.stale .card { filter: saturate(0.6); }

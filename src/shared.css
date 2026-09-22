@@ -1,0 +1,138 @@
+:root {
+  --ink: #ffffff;
+  --ink-2: rgba(255, 255, 255, 0.72);
+  --ink-3: rgba(255, 255, 255, 0.46);
+  --ink-dim: rgba(255, 255, 255, 0.45);
+  --edit-line: rgba(120, 190, 255, 0.85);
+  --accent: #7ec8ff;
+  --warm: #ffcf8a;
+
+  /* Set by widget.js from the window height so a widget keeps its
+     proportions at whatever size it gets dragged to. */
+  font-size: 16px;
+  --card-alpha: 0.85;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: "Hiragino Sans", "Yu Gothic UI", "Segoe UI", system-ui, sans-serif;
+  font-feature-settings: "tnum" 1;
+  color: var(--ink);
+}
+
+.surface {
+  position: absolute;
+  inset: 0;
+  border-radius: 1.25rem;
+  transition: background 180ms ease, box-shadow 180ms ease;
+}
+
+/* A widget floats over whatever the wallpaper happens to be showing, which
+   can be a bright, cloud-white ocean. A transparent window gets no backdrop
+   to blur, so legibility has to come from a scrim.
+
+   The radii are deliberately smaller than the box: a radial gradient that is
+   still opaque where it meets the window edge draws a visible rectangle over
+   the wallpaper, which is exactly the "someone pasted a card here" look this
+   is trying to avoid. Fading out at 86% of a 62% radius puts the alpha at
+   roughly 0.03 on every edge and 0 in the corners. Text near the edges is
+   carried by its shadow instead.
+
+   Want an explicit glass card instead? Replace the whole background with
+   `background: rgba(6, 10, 22, 0.34)` and give it a border-radius. */
+.scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(62% 62% at 50% 50%,
+      rgba(3, 7, 16, 0.58) 0%,
+      rgba(3, 7, 16, 0.40) 40%,
+      rgba(3, 7, 16, 0.16) 66%,
+      rgba(3, 7, 16, 0.04) 80%,
+      transparent 86%);
+}
+
+/* Edit mode is the only time the widget announces its own bounds. */
+body.editing .surface {
+  background: rgba(20, 24, 32, 0.34);
+  box-shadow: inset 0 0 0 1.5px var(--edit-line);
+  cursor: grab;
+}
+
+body.editing.dragging .surface { cursor: grabbing; }
+
+.resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 1.6rem;
+  height: 1.6rem;
+  display: none;
+  cursor: nwse-resize;
+  z-index: 10;
+}
+
+body.editing .resize-handle { display: block; }
+
+.resize-handle::after {
+  content: "";
+  position: absolute;
+  right: 0.45rem;
+  bottom: 0.45rem;
+  width: 0.62rem;
+  height: 0.62rem;
+  border-right: 2px solid var(--edit-line);
+  border-bottom: 2px solid var(--edit-line);
+}
+
+.placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  font-size: 0.94rem;
+  color: var(--ink-dim);
+  letter-spacing: 0.04em;
+}
+
+/* Content shell shared by both widgets. */
+.content {
+  position: absolute;
+  inset: 0;
+  padding: 1.5rem 1.75rem;
+  display: flex;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75), 0 0 10px rgba(0, 0, 0, 0.45);
+}
+
+.stale { opacity: 0.55; }
+
+.note {
+  color: var(--ink-2);
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+}
+
+/* Show Desktop (Win+D) covers the widgets for an instant and the shell hands
+   them back a moment later. Rather than let them snap back into view, the
+   backend veils the page while the desktop is on top and then lets it come up
+   slowly: widget:veil drops it to nothing at once, widget:unveil lets it
+   drift back. See widget.js. */
+:root {
+  transition: opacity 700ms cubic-bezier(0.22, 0.7, 0.2, 1);
+}
+:root.veil {
+  opacity: 0;
+  transition: none;
+}

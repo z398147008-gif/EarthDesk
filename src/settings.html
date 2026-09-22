@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="color-scheme" content="light dark" />
+<title>地球桌面 设置</title>
+<link rel="stylesheet" href="settings.css" />
+</head>
+<body>
+  <main>
+    <h1>设置</h1>
+    <p class="lede">所有改动立即生效。</p>
+
+    <section class="group">
+      <h2>位置</h2>
+      <div class="card">
+        <div class="row">
+          <div class="text">
+            <div class="title">当前城市</div>
+            <div class="desc" id="locNow">—</div>
+          </div>
+        </div>
+        <div class="row picker">
+          <select id="country" aria-label="国家或地区"></select>
+          <select id="admin1" aria-label="省 / 州"></select>
+          <select id="city" aria-label="城市"></select>
+        </div>
+        <div class="row">
+          <div class="text">
+            <div class="desc">天气按这个城市查询，地球也会转到这里。列表里没有你的城市时，选最近的一个即可。</div>
+          </div>
+          <button class="button" id="locSave" disabled>保存</button>
+        </div>
+      </div>
+    </section>
+
+    <div id="groups"></div>
+
+    <section class="group">
+      <h2>硬件监控</h2>
+      <div class="card">
+        <div class="row">
+          <div class="text">
+            <div class="title">温度、风扇、显卡读数 <span class="badge" id="lhmBadge">检测中…</span></div>
+            <div class="desc" id="lhmDesc">由内置的 LibreHardwareMonitor 提供，安装时已自动配置好。</div>
+          </div>
+          <button class="button" id="lhmRepair">一键修复</button>
+        </div>
+        <details class="row guide" id="lhmGuide">
+          <summary>使用说明 / 读不到数据怎么办</summary>
+          <ol>
+            <li><b>正常情况什么都不用做。</b>安装程序已经装好了读取传感器用的驱动（PawnIO）、设置了开机自动在后台运行，并且只允许本机访问。状态显示“运行中”就说明一切正常。</li>
+            <li><b>显示“未运行”：</b>点右上方的<b>一键修复</b>。Windows 会弹出“你要允许此应用对你的设备进行更改吗？”，点<b>是</b>。等 10 秒左右，状态会自动变成“运行中”，性能组件里就会出现温度和风扇。</li>
+            <li><b>点了修复还是不行：</b>
+              <ul>
+                <li>杀毒软件（360、火绒、腾讯电脑管家等）可能拦截了驱动或开机任务。在它的拦截记录里选择“允许 / 信任”，或把地球桌面的安装文件夹加入信任，然后再点一次一键修复。</li>
+                <li>需要 Microsoft .NET Framework 4.8。Windows 10（2018 年 4 月以后的版本）和 Windows 11 都自带；老系统请<a href="#" data-url="https://dotnet.microsoft.com/zh-cn/download/dotnet-framework/net48">从微软官网下载“运行时”</a>安装（国内可直接访问），装完再点一键修复。</li>
+                <li>如果你自己已经开着 LibreHardwareMonitor 或别的占用 8085 端口的程序，先把它退出（或者在它的“选项 → 远程 Web 服务器”里打开服务、端口设为 8085，也可以直接用）。</li>
+                <li>Windows 账户需要是管理员；普通账户弹窗时需要输入管理员密码。</li>
+              </ul>
+            </li>
+            <li><b>自己检查：</b>在浏览器里打开 <a href="#" data-url="http://127.0.0.1:8085/data.json">http://127.0.0.1:8085/data.json</a>，能看到一大段文字就说明硬件监控在工作。</li>
+            <li>没有硬件监控时，CPU、内存和磁盘照样显示，只是没有温度、风扇和显卡占用。</li>
+          </ol>
+        </details>
+      </div>
+    </section>
+
+    <section class="group">
+      <h2>通用</h2>
+      <div class="card">
+        <div class="row">
+          <div class="text">
+            <div class="title">开机自动启动</div>
+            <div class="desc">登录 Windows 后自动打开地球桌面</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="autostart" /><span class="knob"></span></label>
+        </div>
+        <div class="row">
+          <div class="text">
+            <div class="title">组件位置</div>
+            <div class="desc">放在桌面上,还是浮在所有窗口前面</div>
+          </div>
+          <div class="segmented" id="zmode">
+            <button data-mode="desktop">桌面</button>
+            <button data-mode="bottom">最底层</button>
+            <button data-mode="topmost">最前面</button>
+          </div>
+        </div>
+        <div class="row">
+          <div class="text">
+            <div class="title">组件大小</div>
+            <div class="desc">在系统缩放的基础上再放大或缩小</div>
+          </div>
+          <div class="slider">
+            <input type="range" id="scale" min="0.7" max="1.8" step="0.05" />
+            <output id="scaleOut">1.00×</output>
+          </div>
+        </div>
+        <div class="row">
+          <div class="text">
+            <div class="title">背景不透明度</div>
+            <div class="desc">组件卡片背景(含天气动态背景)的浓淡,0% 为只显示文字</div>
+          </div>
+          <div class="slider">
+            <input type="range" id="alpha" min="0" max="1" step="0.05" />
+            <output id="alphaOut">85%</output>
+          </div>
+        </div>
+        <div class="row">
+          <div class="text">
+            <div class="title">调整布局</div>
+            <div class="desc">拖动、缩放组件,完成后再点一次(也可以按 Ctrl + Alt + D)</div>
+          </div>
+          <button class="button" id="edit">编辑模式</button>
+        </div>
+        <div class="row">
+          <div class="text">
+            <div class="title">配置文件</div>
+            <div class="desc">更多参数在 config.json 里</div>
+          </div>
+          <button class="button" id="folder">打开文件夹</button>
+        </div>
+      </div>
+    </section>
+
+    <p class="foot">地球桌面 · 开源免费 · 卫星云图 NASA GIBS · 天气 Open-Meteo · 城市 GeoNames</p>
+  </main>
+  <script type="module" src="settings.js"></script>
+</body>
+</html>

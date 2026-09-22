@@ -1,0 +1,124 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "地球桌面",
+  "version": "1.0.0",
+  "identifier": "dev.earthdesk.app",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "csp": null
+    },
+    "windows": [
+      {
+        "label": "wallpaper",
+        "url": "wallpaper.html",
+        "width": 1920,
+        "height": 1080,
+        "x": 0,
+        "y": 0,
+        "transparent": false,
+        "decorations": false,
+        "shadow": false,
+        "resizable": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": false,
+        "focus": false,
+        "visible": false
+      },
+      {
+        "label": "weather",
+        "url": "index.html",
+        "width": 440,
+        "height": 440,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "resizable": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "focus": false,
+        "visible": false
+      },
+      {
+        "label": "perf",
+        "url": "perf.html",
+        "width": 440,
+        "height": 440,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "resizable": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "focus": false,
+        "visible": false
+      },
+      {
+        "label": "guides",
+        "url": "guides.html",
+        "width": 800,
+        "height": 600,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "resizable": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "focus": false,
+        "visible": false
+      },
+      {
+        "label": "settings",
+        "url": "settings.html",
+        "title": "地球桌面 设置",
+        "width": 560,
+        "height": 820,
+        "minWidth": 460,
+        "minHeight": 420,
+        "center": true,
+        "resizable": true,
+        "decorations": true,
+        "transparent": false,
+        "skipTaskbar": false,
+        "alwaysOnTop": false,
+        "visible": false
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ],
+    "publisher": "EarthDesk",
+    "copyright": "MIT License",
+    "shortDescription": "实时地球壁纸 + 天气 + 硬件监控",
+    "resources": {
+      "vendor/lhm/": "lhm/"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller",
+        "silent": true
+      },
+      "nsis": {
+        "languages": [
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": false,
+        "installMode": "perMachine",
+        "installerHooks": "windows/hooks.nsh",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
+  },
+  "mainBinaryName": "EarthDesk"
+}

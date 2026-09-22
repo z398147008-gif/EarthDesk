@@ -1,0 +1,26 @@
+[package]
+name = "earth-desk"
+version = "1.0.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-global-shortcut = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+sysinfo = "0.32"
+tokio = { version = "1", features = ["time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Win32 is reached through hand-declared FFI in src/platform.rs rather than the
+# `windows` crate: the surface we need is a dozen user32 calls, and this keeps
+# the dependency tree (and the build time) small.
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
