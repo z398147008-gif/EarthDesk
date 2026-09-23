@@ -47,13 +47,13 @@ const DEFAULTS = {
   atmosphere_scale: 1.2,
   atmosphere_extinction: 1,
   // The eye-soft limb: pale haze band (radii) and warm outer bloom (radii).
-  limb_soft: 0.011,
+  limb_soft: 0.014,
   limb_glow: 0.026,
   // Lens glow: strength, and how bright a pixel must be to glow (0..1).
   bloom: 0.35,
   bloom_threshold: 0.55,
   // Faint wide scatter over the whole frame.
-  veil: 0.12,
+  veil: 0.08,
   render_scale: 1,
   drift_deg_per_hour: 0,
   cloud_opacity: 0.9,
@@ -62,7 +62,7 @@ const DEFAULTS = {
   city_lights: 1,
   stars: 0.4,
   // The Milky Way behind the planet (NASA Deep Star Maps). 0 hides it.
-  milky_way: 0.06,
+  milky_way: 0.035,
   // Faint procedural dust nebula behind the planet, as on the iPad. 0 hides it.
   nebula: 1,
   sun: 1,
@@ -484,7 +484,12 @@ void main() {
       float muV = max(dot(n, Vw), 0.12);
       vec3 vT = Vw - n * dot(Vw, n);
       float h0 = textureGrad(uClouds, cuv, ddx * 6.0, ddy * 6.0).g;
-      vec3 offW = vT / muV * h0 * HMAX;
+      // ... but only while the eye still looks at the tops. In the last few
+      // degrees before the limb that same displacement smears every deck
+      // sideways and stacks them into the lumpy grey rim we had; the
+      // reference flattens its clouds there and lets the haze take over.
+      float limbFlat = smoothstep(0.45, 0.12, muV);
+      vec3 offW = vT / muV * h0 * HMAX * (1.0 - 0.80 * limbFlat);
       cuv += vec2(dot(offW, east) / (coslat * TAU), -dot(offW, north) / PI);
       vec3 cloudRGB = textureGrad(uClouds, cuv, ddx * blurK, ddy * blurK).rgb;
       vec2 cloudRG = cloudRGB.rg;
@@ -638,14 +643,14 @@ void main() {
       vec2 qS = textureGrad(uClouds, cuv + dN * 6.0, ddx * bc, ddy * bc).rg;
       float gE = qE.r * 0.6 + qE.g, gW = qW.r * 0.6 + qW.g;
       float gN = qN.r * 0.6 + qN.g, gS = qS.r * 0.6 + qS.g;
-      float bumpK = mix(1.1, 2.2, smoothstep(0.25, 0.7, cTop));
+      float bumpK = mix(1.1, 2.2, smoothstep(0.25, 0.7, cTop)) * (1.0 - 0.85 * limbFlat);
       vec3 cN3 = normalize(n - bumpK * ((fE - fW) * east + (fN - fS) * north)
-                             - 0.7 * ((gE - gW) * east + (gN - gS) * north));
+                             - 0.7 * (1.0 - 0.85 * limbFlat) * ((gE - gW) * east + (gN - gS) * north));
       // Cavities: where this spot is thinner than its surroundings it sits
       // in a trough between lobes and gets less sky -- the grey folds that
       // give a storm its sculpted body.
       float around = 0.25 * (qE.r + qW.r + qN.r + qS.r);
-      float cavity = clamp((around - cloudRaw) * 2.2, 0.0, 1.0);
+      float cavity = clamp((around - cloudRaw) * 2.2, 0.0, 1.0) * (1.0 - limbFlat);
 
       // Self-shadowing: march a few steps toward the sun through the height
       // field; anything standing higher than the sun ray puts this spot in
@@ -658,7 +663,7 @@ void main() {
         float rayH = here + dist * tanE;
         occl = max(occl, clamp((hs - rayH) / (0.25 * HMAX), 0.0, 1.0));
       }
-      float sunVis = 1.0 - 0.75 * occl * day;
+      float sunVis = 1.0 - 0.75 * occl * day * (1.0 - limbFlat);
 
       // Light: warm direct sun on the lit side, cool blue skylight in the
       // shade. That colour split -- not brightness alone -- is what makes
@@ -682,6 +687,9 @@ void main() {
       cloudCol *= mix(0.86, 1.12, thick);
       cloudCol = mix(cloudCol * vec3(0.80, 0.84, 0.92), cloudCol, day);
       cloudCol *= cloudLightC / max(cloudLight, 1e-3);   // tint by the light's colour
+      // Toward the limb the clouds turn into the pale, even veil the
+      // reference shows there: no relief, no grey folds, no stacking.
+      cloudCol = mix(cloudCol, vec3(0.94, 0.96, 1.00) * mix(0.55, 1.0, day), limbFlat * 0.75);
       // At night clouds are only a faint grey hint, as in the reference.
       surface = mix(surface, cloudCol * cloudLight, cloud * mix(0.40, 1.0, day));
       // Cities light the underside of the cloud deck above them.
@@ -778,8 +786,8 @@ void main() {
     // Inside: the ground keeps its colour much closer to the edge than it
     // used to -- in the reference you can still read coastlines a pixel or
     // two from the silhouette, and only the very last sliver goes to haze.
-    float inner = exp(-max(-hL, 0.0) / (wIn * 0.75));
-    surface = mix(surface, pale * (0.7 + 0.3 * lit), min(inner * 1.25, 1.0) * 0.62 * mix(0.35, 1.0, lit));
+    float inner = exp(-max(-hL, 0.0) / (wIn * 0.85));
+    surface = mix(surface, pale * (0.72 + 0.28 * lit), min(inner * 1.3, 1.0) * 0.80 * mix(0.35, 1.0, lit));
     // Anti-aliased silhouette: a couple of pixels, never less.
     float aa = 1.0 - smoothstep(-1.5 * px, 1.5 * px, hL);
     coverage = max(min(coverage, aa), 0.0);
@@ -789,12 +797,19 @@ void main() {
     // as air rather than as a drawn outline. Two falloffs carry it: a tight
     // one hugging the silhouette and a broad halo, each with its own colour.
     float o = max(hL, 0.0);
-    float aNear = exp(-o / (wIn * 1.9)) * 0.26;
+    float aNear = exp(-o / (wIn * 1.9)) * 0.22;
     float aFar = exp(-o / wOut) * 0.52;
-    vec3 cNear = mix(vec3(0.82, 0.86, 0.94), pale, 0.30);
-    vec3 cMid = mix(vec3(0.44, 0.44, 0.44), vec3(0.30, 0.58, 0.86), blue);
-    vec3 cFar = mix(vec3(0.20, 0.19, 0.18), vec3(0.05, 0.17, 0.40), blue);
-    vec3 glow = cNear * aNear + mix(cMid, cFar, smoothstep(wIn * 1.5, wOut * 1.7, o)) * aFar;
+    // Four stops, measured up a column of the reference's air: white at the
+    // silhouette, pale cyan-white, a clear cyan, then a deep cyan-blue that
+    // fades into black. Apple's band is far more colourful than a single
+    // blue ramp; this is where that comes from.
+    vec3 cNear = mix(vec3(0.84, 0.88, 0.94), pale, 0.25);
+    vec3 cPale = mix(vec3(0.52, 0.52, 0.51), vec3(0.62, 0.80, 0.96), blue);
+    vec3 cMid = mix(vec3(0.44, 0.44, 0.43), vec3(0.34, 0.68, 0.92), blue);
+    vec3 cFar = mix(vec3(0.20, 0.19, 0.18), vec3(0.11, 0.50, 0.78), blue);
+    float t1 = smoothstep(0.0, wIn * 1.8, o);
+    float t2 = smoothstep(wIn * 1.6, wOut * 1.9, o);
+    vec3 glow = cNear * aNear + mix(mix(cPale, cMid, t1), cFar, t2) * aFar;
     // The physical scattering peaks in a razor-thin line exactly at the
     // horizon; that is the hard edge the eye does not see. Let it through
     // only well inside the disc.
