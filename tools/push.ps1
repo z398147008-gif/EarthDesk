@@ -1,4 +1,4 @@
-# 把这个项目推到 GitHub:https://github.com/z398147008-gif/EarthDesk
+﻿# 把这个项目推到 GitHub:https://github.com/z398147008-gif/EarthDesk
 # 第一次运行会弹出浏览器让你登录 GitHub,登录完就会自动上传。
 $ErrorActionPreference = "Continue"
 $root = Join-Path $PSScriptRoot ".."
