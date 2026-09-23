@@ -9,9 +9,11 @@ Windows 桌面组件套件:实时光照的地球壁纸 + 天气组件 + 机器�
 红外,每十分钟更新),星空是真实星表,月亮在它真实的位置和相位上。构图、调色、
 大气边缘都是对着 Apple 的地球壁纸逐像素量出来的。
 
+仓库:<https://github.com/z398147008-gif/EarthDesk>
+
 ## 直接用(不想编译)
 
-1. 下载 Releases 里的 `地球桌面_x.y.z_x64-setup.exe`,双击安装。
+1. 下载 [Releases](https://github.com/z398147008-gif/EarthDesk/releases) 里的 `地球桌面_x.y.z_x64-setup.exe`,双击安装。
    - 安装包已内置 WebView2 离线安装包和硬件监控(LibreHardwareMonitor + PawnIO 驱动),
      装的过程中会问一次"是否允许此应用对你的设备进行更改",点【是】就全配置好了。
    - 安装包没有数字签名,Windows 可能提示"已保护你的电脑":【更多信息】→【仍要运行】。
