@@ -7,6 +7,9 @@
     "weather",
     "perf",
     "guides",
+    "capture",
+    "clippanel",
+    "cliphistory",
     "settings"
   ],
   "permissions": [

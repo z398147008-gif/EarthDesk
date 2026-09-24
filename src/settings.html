@@ -10,6 +10,16 @@
   <main>
     <h1>设置</h1>
     <p class="lede">所有改动立即生效。</p>
+    <nav class="tabs" id="tabs">
+      <button type="button" data-tab="desk" class="on">桌面</button>
+      <button type="button" data-tab="gestures">鼠标手势</button>
+      <button type="button" data-tab="hotkeys">快捷键</button>
+      <button type="button" data-tab="capture">截图</button>
+      <button type="button" data-tab="clipboard">剪贴板</button>
+      <button type="button" data-tab="ime">输入法</button>
+    </nav>
+
+    <div class="tab" data-tab="desk">
 
     <section class="group">
       <h2>位置</h2>
@@ -41,25 +51,36 @@
       <div class="card">
         <div class="row">
           <div class="text">
-            <div class="title">温度、风扇、显卡读数 <span class="badge" id="lhmBadge">检测中…</span></div>
-            <div class="desc" id="lhmDesc">由内置的 LibreHardwareMonitor 提供，安装时已自动配置好。</div>
+            <div class="title">温度、风扇、显卡读数 <span class="badge" id="hwBadge">检测中…</span></div>
+            <div class="desc" id="hwDesc">由地球桌面内置的硬件监控服务提供。</div>
           </div>
-          <button class="button" id="lhmRepair">一键修复</button>
+          <button class="button" id="hwRepair" hidden>修复</button>
         </div>
-        <details class="row guide" id="lhmGuide">
-          <summary>使用说明 / 读不到数据怎么办</summary>
+        <div class="row" id="hwFoundRow" hidden>
+          <div class="text">
+            <div class="title">已识别的硬件</div>
+            <div class="desc chips" id="hwFound"></div>
+          </div>
+        </div>
+        <div class="row" id="hwNoteRow" hidden>
+          <div class="text">
+            <div class="desc warn" id="hwNote"></div>
+          </div>
+        </div>
+        <details class="row guide" id="hwGuide">
+          <summary>说明 / 读不到数据怎么办</summary>
           <ol>
-            <li><b>正常情况什么都不用做。</b>安装程序已经装好了读取传感器用的驱动（PawnIO）、设置了开机自动在后台运行，并且只允许本机访问。状态显示“运行中”就说明一切正常。</li>
-            <li><b>显示“未运行”：</b>点右上方的<b>一键修复</b>。Windows 会弹出“你要允许此应用对你的设备进行更改吗？”，点<b>是</b>。等 10 秒左右，状态会自动变成“运行中”，性能组件里就会出现温度和风扇。</li>
-            <li><b>点了修复还是不行：</b>
+            <li><b>正常情况什么都不用做。</b>硬件监控是地球桌面自带的一个后台服务（“EarthDesk Hardware Sensors”），安装时已经配置好：开机自动运行，没有窗口，也不在托盘里显示；它出错退出时 Windows 会自动把它重新拉起来，停了或者卡住时地球桌面也会自己重启它。</li>
+            <li><b>需要你操作的只有一种情况：</b>上面出现<b>修复</b>按钮。点它，Windows 会问“你要允许此应用对你的设备进行更改吗？”，点<b>是</b>。它会重新安装读取传感器用的驱动（PawnIO）和后台服务，十几秒后状态变成“正常”。</li>
+            <li><b>修复后还是不行：</b>
               <ul>
-                <li>杀毒软件（360、火绒、腾讯电脑管家等）可能拦截了驱动或开机任务。在它的拦截记录里选择“允许 / 信任”，或把地球桌面的安装文件夹加入信任，然后再点一次一键修复。</li>
-                <li>需要 Microsoft .NET Framework 4.8。Windows 10（2018 年 4 月以后的版本）和 Windows 11 都自带；老系统请<a href="#" data-url="https://dotnet.microsoft.com/zh-cn/download/dotnet-framework/net48">从微软官网下载“运行时”</a>安装（国内可直接访问），装完再点一键修复。</li>
-                <li>如果你自己已经开着 LibreHardwareMonitor 或别的占用 8085 端口的程序，先把它退出（或者在它的“选项 → 远程 Web 服务器”里打开服务、端口设为 8085，也可以直接用）。</li>
-                <li>Windows 账户需要是管理员；普通账户弹窗时需要输入管理员密码。</li>
+                <li>杀毒软件（360、火绒、腾讯电脑管家等）可能拦截了驱动或服务。在它的拦截记录里选“允许 / 信任”，或把地球桌面的安装文件夹加入信任，再点一次修复。</li>
+                <li>需要 Microsoft .NET Framework 4.8。Windows 10（2018 年 4 月以后的版本）和 Windows 11 都自带；老系统请<a href="#" data-url="https://dotnet.microsoft.com/zh-cn/download/dotnet-framework/net48">从微软官网下载“运行时”</a>安装（国内可直接访问）。</li>
+                <li>Windows 账户需要是管理员；普通账户点修复时需要输入管理员密码。</li>
+                <li>运行记录在 <code>C:\ProgramData\EarthDesk\sensors.log</code>，把它发给开发者可以帮助排查。</li>
               </ul>
             </li>
-            <li><b>自己检查：</b>在浏览器里打开 <a href="#" data-url="http://127.0.0.1:8085/data.json">http://127.0.0.1:8085/data.json</a>，能看到一大段文字就说明硬件监控在工作。</li>
+            <li>以前单独装过 LibreHardwareMonitor 的话，现在已经用不着它了，可以退出或卸载。</li>
             <li>没有硬件监控时，CPU、内存和磁盘照样显示，只是没有温度、风扇和显卡占用。</li>
           </ol>
         </details>
@@ -76,6 +97,7 @@
           </div>
           <label class="switch"><input type="checkbox" id="autostart" /><span class="knob"></span></label>
         </div>
+        <div class="row" id="elevateRow"></div>
         <div class="row">
           <div class="text">
             <div class="title">组件位置</div>
@@ -124,8 +146,46 @@
       </div>
     </section>
 
+    </div>
+
+    <div class="tab" data-tab="gestures" hidden></div>
+    <div class="tab" data-tab="hotkeys" hidden></div>
+    <div class="tab" data-tab="capture" hidden></div>
+    <div class="tab" data-tab="clipboard" hidden></div>
+    <div class="tab" data-tab="ime" hidden></div>
+
     <p class="foot">地球桌面 · 开源免费 · 卫星云图 NASA GIBS · 天气 Open-Meteo · 城市 GeoNames</p>
   </main>
+
+  <dialog id="ruleDialog">
+    <form method="dialog">
+      <header><h3 id="ruleTitle">编辑</h3></header>
+      <div id="ruleBody" class="dialog-body"></div>
+      <div id="ruleWarn" class="note"></div>
+      <footer>
+        <button class="button danger" value="delete" id="ruleDelete" formnovalidate>删除</button>
+        <button class="button plain" type="button" id="ruleTry" title="立即执行一次这个动作">试一下</button>
+        <span class="spacer"></span>
+        <button class="button plain" value="cancel" formnovalidate>取消</button>
+        <button class="button active" value="ok" id="ruleSave">保存</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="appDialog">
+    <form method="dialog">
+      <header><h3>选择程序</h3><div class="desc">正在运行、有窗口的程序</div></header>
+      <div id="appList" class="app-list"></div>
+      <label class="field"><span>或者手动输入程序名（多个用空格分开）</span><input type="text" id="appManual" placeholder="例如 chrome.exe code.exe" spellcheck="false" /></label>
+      <footer>
+        <span class="spacer"></span>
+        <button class="button plain" value="cancel">取消</button>
+        <button class="button active" value="ok">添加</button>
+      </footer>
+    </form>
+  </dialog>
+
   <script type="module" src="settings.js"></script>
+  <script type="module" src="settings-tools.js"></script>
 </body>
 </html>

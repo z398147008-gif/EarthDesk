@@ -1,0 +1,5 @@
+# The TSF DLL is loaded into every program the user types in; link the C
+# runtime statically so it never depends on a Visual C++ redistributable
+# being installed (same for the engine).
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -14,15 +14,16 @@ Windows 桌面组件套件:实时光照的地球壁纸 + 天气组件 + 机器�
 ## 直接用(不想编译)
 
 1. 下载 [Releases](https://github.com/z398147008-gif/EarthDesk/releases) 里的 `地球桌面_x.y.z_x64-setup.exe`,双击安装。
-   - 安装包已内置 WebView2 离线安装包和硬件监控(LibreHardwareMonitor + PawnIO 驱动),
-     装的过程中会问一次"是否允许此应用对你的设备进行更改",点【是】就全配置好了。
+   - 安装包已内置 WebView2 离线安装包和硬件监控(自带的后台服务,基于 LibreHardwareMonitor 的库
+     + PawnIO 驱动),装的过程中会问一次"是否允许此应用对你的设备进行更改",点【是】就全配置好了。
+     硬件监控没有窗口、不占托盘、开机自动运行。
    - 安装包没有数字签名,Windows 可能提示"已保护你的电脑":【更多信息】→【仍要运行】。
 2. 装完直接能用。托盘右键 →【设置…】:
    - **位置**:国家 / 省·州 / 城市三级下拉(内置 GeoNames 全球 2.5 万个城市,中日港澳台为中文名),
      选好保存,天气和地球一起换过去;
    - 开机自启、组件层级、大小、背景浓淡;
    - 每个组件和组件里的每一块(逐时/每日预报、CPU/显卡/内存/磁盘/温度/风扇)单独开关;
-   - **硬件监控**:状态、一键修复,以及读不到数据时该怎么办的完整说明。
+   - **硬件监控**:状态、识别到的硬件;只有真的需要管理员授权时才出现【修复】按钮。
 3. `Ctrl + Alt + D` 进出编辑模式,可以拖动、缩放组件,会自动吸附对齐。
 
 联网只用三个服务,中国大陆都能直接访问:Open-Meteo(天气)、NASA GIBS(葵花卫星云图)、
@@ -40,8 +41,10 @@ matteason 的全球云图。拉不到时自动退回内置云图,不影响使用
 - Rust(stable,MSVC 工具链)
 - WebView2 Runtime(Win10/11 通常已预装)
 - `cargo install tauri-cli --version "^2"`
-- 打包安装版之前先跑一次 `tools/fetch-vendor.ps1`:它把 LibreHardwareMonitor 和
-  PawnIO 驱动下载到 `src-tauri/vendor/lhm/`(这些是第三方二进制,没有进版本库)。
+- 硬件监控服务 `sensors/EarthDeskSensors.cs` 由 `tools/build-sensors.ps1` 用 Windows 自带的
+  .NET Framework 编译器(csc.exe)编译到 `src-tauri/vendor/sensors/`;第一次会调用
+  `tools/fetch-vendor.ps1` 下载 LibreHardwareMonitor 的库文件和 PawnIO 驱动安装器
+  (第三方二进制,没有进版本库)。`3-打包` 和 `2-运行` 都会自动做这一步。
 
 Node 不是必须的:前端是纯静态 ES module,没有打包步骤。
 
@@ -167,27 +170,82 @@ explorer.exe 重启、分辨率变化都可能把窗口踢出那一层,有个 60
 
 CPU 占用(总体 + 每逻辑核)、内存、交换、各卷容量来自 `sysinfo`,不需要任何权限。
 
-**温度、风扇转速、显卡占用 / 显存 / 功耗来自 LibreHardwareMonitor。** Windows 没有
-读这些的公开 API,所以需要:
+**温度、风扇转速、显卡占用 / 显存 / 功耗来自内置的硬件监控服务。** Windows 没有读这些的
+公开 API。1.0.0 是在后台跑 LibreHardwareMonitor 程序本身(托盘图标 + 8085 端口的网页服务),
+1.1 起换成自己的 Windows 服务 `EarthDeskSensors`(`sensors/EarthDeskSensors.cs`),里面用的是
+LibreHardwareMonitor 的库(LibreHardwareMonitorLib.dll,原样随附):
 
-1. 装 [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
-2. **以管理员身份运行**(不然读不到 B660M 主板的 Super I/O,风扇转速会是空的)
-3. Options → Remote Web Server → Run,默认端口 8085
+- 以 LocalSystem 开机自启,没有窗口,不在托盘里;
+- 不开任何网络端口,地球桌面通过命名管道 `\\.\pipe\EarthDeskSensors` 读取,只有本机登录的
+  用户能读,网络访问被拒绝;不会和别的程序抢 8085,也不会被 VPN / 代理吞掉;
+- 有人来读才采样(最快每 0.8 秒一次),地球桌面不开时不占 CPU;关闭了 LHM 库默认给每个传感器
+  保留一天历史的功能(那是界面画曲线用的,常驻进程里就是缓慢的内存增长);
+- 服务崩溃由 Windows 服务管理器自动重启;采样卡住 60 秒或内存超过 400 MB 时自己退出,
+  交给服务管理器重启;服务被停掉或者不响应时,地球桌面用安装时授予的权限自己把它
+  启动 / 重启(`watchdog.log` 里有 `sensors:` 记录),不弹授权框;
+- 插拔 U 盘 / 移动硬盘时自动重新枚举磁盘,新插的盘也有温度;开机时没找到显卡(驱动还没起来)
+  会在 90 秒后再找一次;
+- 移动硬盘盒把温度藏起来(LHM / CrystalDiskInfo 显示“?”)时,服务直接通过硬盘盒的 SAT 转换问硬盘:
+  先读 Device Statistics 日志第 5 页的当前温度,不行再读 SMART 194/190;只读命令,每块盘最多
+  一分钟一次,硬盘休眠时不去叫醒它。结果以 `USB disk E:` 的名字交给 perf.js,按盘符直接对上;
+  机械盘 55°C 起温度标成警示色;
+- 运行记录在 `C:\ProgramData\EarthDesk\sensors.log`,安装记录在同目录 `setup.log`。
 
-`lhm_url` 可以指向别的机器(比如 Tailscale 地址),只写到端口也行,程序会自己补
-`/data.json`;同时还会顺带试一下本机 127.0.0.1 的同一个端口。
+只有服务或驱动本身坏了才需要用户:设置页出现【修复】,点一下、在 UAC 里点【是】,
+它以管理员身份重跑安装时那份 `setup-sensors.ps1`。
 
-客户端显式关闭了系统代理。开着 VPN 时,走系统代理的 HTTP 客户端会把发往
-127.0.0.1 的请求一并丢进代理,传感器于是永远读不到 —— 这一条踩过一次。
+服务不响应时,如果 `lhm_url` 指向一个自己运行的 LibreHardwareMonitor 网页服务,会临时用它顶上
+(可以写到端口为止,会自动补 `/data.json`,并顺带试本机 127.0.0.1 的同一端口)。
 
-地球桌面每 2 秒拉一次 `http://127.0.0.1:8085/data.json`。LHM 没开的时候组件照常
-显示 CPU / 内存 / 磁盘,显卡环显示 `--`,底部写明缺的是什么 —— 不会编数字。
-
-传感器归属是按 LHM 给每个硬件节点的图标(`ImageURL`)判定的,比猜名字可靠。
+两种来源都没有时组件照常显示 CPU / 内存 / 磁盘,显卡环显示 `--`,底部写明缺的是什么 —— 不会编数字。
 
 ## 设置页
 
 托盘右键 →「设置…」。地球桌面、天气、性能三个总开关，外加每个组件内部的分块开关（天气：逐时 / 每日；性能：CPU / 显卡 / 内存 / 磁盘 / 温度 / 风扇）。总开关关掉时子项变灰。另有层级（仅桌面 / 置底 / 置顶）、字号 0.7–1.8×、编辑模式、打开配置目录。开关存在 config.json 的 `features` 里，缺省即开启，改动通过 `features:changed` 事件即时推给各窗口。
+
+## 鼠标手势与快捷键
+
+设置页「鼠标手势」「快捷键」两栏，规则存在 `%APPDATA%\EarthDesk\toolkit.json`（和 config.json 分开，换电脑可以直接拷过去）。
+
+- **手势**：按住右键拖动，识别 8 个方向（可关掉斜向）。只点一下右键时原样补发一次右键，菜单照常；按住不动超过 0.45 秒交还给程序（右键拖动照常）。拖动中按左键或 Esc 取消。
+- **默认手势**：← 返回、→ 前进、↑↓ 刷新、↓→ 关闭窗口（浏览器里关闭标签页）、↓← 恢复标签页、↑← / ↑→ 切换标签页、↓ 最小化、↑ 最大化、→↑ / →↓ 到顶 / 到底。
+- **动作**：按键组合（可多组依次按）、启动程序、打开网址 / 文件夹 / 文件、输入文字、内置功能（窗口、媒体、音量、锁屏…）、不做任何事（用来在某个程序里屏蔽全局手势）。
+- **范围**：每条规则可以是所有程序 / 仅在这些程序 / 除了这些程序。同一手势写了「仅在这些程序」的那条优先。另有整体排除列表；全屏程序（游戏、视频）里默认不接管右键。
+- **实现**：`src-tauri/src/toolkit/`。低级鼠标 / 键盘钩子在独立线程上，回调只查表，动作交给工作线程；轨迹是原生分层窗口（Direct2D），只有笔画包围盒那么大。快捷键也走键盘钩子，所以能按程序区分、能录 Win 组合键。
+- **管理员身份**：Windows 不让普通权限的程序把手势 / 按键送进管理员窗口（任务管理器等）。安装程序创建计划任务「EarthDesk (用户名)」（最高权限），之后地球桌面每次都通过它以管理员身份启动，不弹 UAC；开机启动也改由这个任务负责。由它启动的程序经 Explorer 转手，仍是普通权限（规则里勾了「以管理员身份运行」的除外）。试运行（`cargo tauri dev`）不提权。
+- 托盘菜单「暂停手势和快捷键」可以临时全部停用。
+
+## 截图与贴图
+
+- **F1 截图**（照 Snipaste）：屏幕先由原生窗口冻结，再换成常驻的截图页面，所以按下即停。指针下的窗口和控件（UI Automation）自动高亮，单击选中，滚轮切换层级；放大镜取色（C 复制）；方向键微调；`,` `.` 翻截图记录。标注：矩形、椭圆、直线、箭头、画笔、马克笔、马赛克 / 模糊、文字、序号、橡皮擦，可再次拖动和修改。Enter / 双击复制（剪贴板同时放 DIB 和 PNG），Ctrl+S 保存到「图片\EarthDesk」，Ctrl+Shift+S 另存为，F3 贴到屏幕。代码：`src-tauri/src/capture/`、`src/capture.*`。
+- **F3 贴图**：把剪贴板里的图片（含资源管理器里复制的图片文件）或文字贴在最前面；截图时按 F3 贴出选区，原地"浮起"。贴图可拖动、滚轮缩放、Ctrl+滚轮透明度、双击缩略、1/2 旋转、3/4 翻转、空格进入标注、Ctrl+C / Ctrl+S、Esc 关闭，右键菜单里有鼠标穿透（托盘「贴图」里统一取消）。每个贴图是一个透明小窗口（`pin-<id>`，`src/pin.*`，`src-tauri/src/pins.rs`）。
+
+## 剪贴板历史
+
+- 每次复制都记下来（文字含网页格式、图片、文件列表），存在 `%APPDATA%\EarthDesk\clipboard\`（SQLite + PNG），只在本机。同样的内容再复制一次只会移到最前。默认保留 1000 条 / 30 天，收藏的永久保留。
+- **Alt+V** 在光标（或指针）旁弹出面板：直接打字搜索，↑↓ 选择，Enter 粘贴回原来的窗口，Shift+Enter 粘贴纯文本，Ctrl+1…9 直接粘贴第几条，Ctrl+P 收藏，Ctrl+T 贴到屏幕，Delete 删除，Esc / 点别处关闭。
+- 管理窗口（面板里「管理…」、设置页、或内置功能「剪贴板历史（管理窗口）」）：左边列表、右边完整内容，复制 / 复制为纯文本 / 贴到屏幕 / 收藏 / 删除 / 清空。
+- 隐私：密码管理器（KeePass、1Password、Bitwarden 等）里的复制不记录；程序用 `ExcludeClipboardContentFromMonitorProcessing`、`Clipboard Viewer Ignore` 或 `CanIncludeInClipboardHistory = 0` 标记的内容一律跳过。
+- 代码：`src-tauri/src/cliphist/`（`store.rs` 有单元测试）、监听在 `toolkit/win/clipboard.rs`、页面 `src/clip.*`。
+
+## 地球桌面输入法
+
+装地球桌面时一起装好（设置页「输入法」栏看状态、改选项）。Win + 空格切到「地球桌面输入法」即可打字。
+
+- **微软双拼**，基于 [librime](https://github.com/rime/librime) 1.17（中州韵引擎）和 [雾凇拼音](https://github.com/iDvel/rime-ice) 的词库：候选按使用频率和最近使用排序、自动造词、整句输入；Shift 切中 / 英，`- =` 翻页，`[ ]` 以词定字，F4 菜单（简繁 / 全角 / Emoji）。
+- 按程序默认英文（游戏、终端…）、每页候选数、Emoji、快捷短语（`custom_phrase_double.txt`）在设置页里改。
+- **组成**：`ime/` 是独立的 Cargo 工作区，三个 crate ——
+  - `proto`：DLL 和引擎之间的管道协议（长度前缀 + JSON）；
+  - `tsf`：`EarthDeskTSF.dll`（64 位）/ `EarthDeskTSF32.dll`（32 位），TSF 文本服务，装进每个打字的程序里。它只转发按键、显示下划线的输入串、插入上屏文字，按键在 `OnTestKeyDown` 里就问完引擎（Weasel 的做法），每次调用 400 毫秒超时，引擎不在时按键原样交给程序；
+  - `engine`：`EarthDeskIME.exe`，每个登录会话一个、普通权限，持有 librime、用户词库和候选窗（分层窗口 + Direct2D，跟随系统深浅色）。管道只接受本用户和沙盒（UWP）程序。
+- 用户数据在 `%APPDATA%\EarthDesk\ime\`（`rime\` 词库与部署结果、`settings.json`、`ime.log`），只在本机。
+- 安装包里的 `ime\EarthDeskIME.exe --register --enable --deploy` 注册两个 DLL、加到当前用户的键盘列表、部署词库；卸载时 `--disable --unregister`。开发时双击 `5-试用输入法.bat`（编译、弹一次 UAC 注册、部署）。
+- 编译：`tools/build-ime.ps1`（`2-运行` / `3-打包` 会自动调用），第三方文件由 `tools/fetch-ime.ps1` 下载到 `src-tauri/vendor/ime/`。
+- **日语 / 中日混合**（第二阶段）：日语用 [Mozc](https://github.com/google/mozc) 的转换引擎，编成 `earthdesk_mozc.dll` 在引擎进程里直接调用（`ime/mozc/earthdesk_mozc.cc`，协议就是 Mozc 自己的 `commands::Command` protobuf，不经过 mozc_server）。GitHub Actions（`.github/workflows/mozc.yml`）在 Windows 上编译并发布到 Release `mozc-13c9898`，`tools/build-ime.ps1` 下载；下载不到时输入法只有中文。
+  - 默认**中日混合**：同一串字母同时交给双拼（Rime）和罗马字（Mozc），`engine/src/mixed.rs` 分三层决定谁在前：拼不拼得通 → 是不是完整的词（双拼半个音节 vs 罗马字读完）→ 上一次上屏的语言和这串字母以前选过哪边（`%APPDATA%\EarthDesk\ime\langpref.json`）。日语候选标「日」，日语领先时空格进入 Mozc 的转换（分段、换候选、Enter 上屏）。
+  - Ctrl+Shift+J 或 `/mix` `/ja` `/zh` 切换模式，每个程序记住（`modes.json`）；日语上屏后按 `` ` `` 在原样 / ひらがな / カタカナ 之间原地替换；F6–F10 假名、半角、英数转换。
+  - 逻辑在 `engine/src/compose.rs`；`EarthDeskIME --cli KEYS` 可以在 Linux 上把整个流程跑一遍（需要 `libearthdesk_mozc.so`，`python ime/mozc/build.py <mozc 源码>` 编出来）。
+- 路线：第三阶段加上下文语言模型、按键盘距离和上下文的纠错、快捷短语管理。
 
 ## 闪屏的根因
 
@@ -238,7 +296,7 @@ CPU 占用(总体 + 每逻辑核)、内存、交换、各卷容量来自 `sysinf
 
 | 字段 | 默认 |
 | --- | --- |
-| `lhm_url` | `http://127.0.0.1:8085/data.json` |
+| `lhm_url` | `http://127.0.0.1:8085/data.json`(只在内置服务不响应时作为备用) |
 | `sample_ms` | 2000 |
 
 坐标一律按物理像素存储,这样换缩放比例或换显示器时位置不会漂。首次运行
@@ -259,7 +317,14 @@ src-tauri/
   src/platform.rs    Win32:免激活、免 Alt+Tab、z 序、WorkerW 注入
   src/wallpaper.rs   壁纸窗口的铺屏与图层看门狗
   src/weather.rs     Open-Meteo 客户端
-  src/sysmon.rs      sysinfo 采样 + LibreHardwareMonitor 解析
+  src/sysmon.rs      sysinfo 采样 + 读硬件监控服务(命名管道)
+  src/environment.rs 硬件监控服务的状态 / 启动 / 修复,开机自启
+  windows/hooks.nsh  安装包钩子:装驱动和服务、清理 1.0.0 的 LHM
+ime/                 地球桌面输入法（独立 Cargo 工作区，见上文）
+  proto/ tsf/ engine/
+sensors/
+  EarthDeskSensors.cs  硬件监控服务(C# 5,基于 LibreHardwareMonitorLib)
+  setup-sensors.ps1    安装 / 修复 / 卸载服务(需要管理员)
   capabilities/      Tauri 2 ACL:前端只拿到 listen 和读自身几何
 src/
   wallpaper.html     壁纸窗口
@@ -294,6 +359,6 @@ src/
 本项目的代码以 MIT 许可发布,见 [LICENSE](LICENSE)。
 
 用到的数据、素材和第三方程序各有各的许可(NASA 贴图与卫星云图、GeoNames 城市库、
-Meteocons 图标、LibreHardwareMonitor、PawnIO 驱动、Open-Meteo),清单和链接见
-[THIRD_PARTY.md](THIRD_PARTY.md)。安装包里附带的 LibreHardwareMonitor 与 PawnIO
+Meteocons 图标、LibreHardwareMonitor 的库、PawnIO 驱动、Open-Meteo),清单和链接见
+[THIRD_PARTY.md](THIRD_PARTY.md)。安装包里附带的 LibreHardwareMonitorLib 与 PawnIO
 分别按 MPL-2.0 和 GPL-2.0-or-later 分发,对应源码在那份清单里给了地址。

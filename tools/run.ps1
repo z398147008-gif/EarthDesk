@@ -25,6 +25,10 @@ Write-Host "    - 关掉这个黑窗口 = 关掉程序" -ForegroundColor Gray
 Write-Host ""
 
 Set-Location (Join-Path $PSScriptRoot "..")
+# 打包配置里引用了硬件监控服务的文件,缺了会编译失败,所以试运行也先准备好。
+& (Join-Path $PSScriptRoot "build-sensors.ps1")
+# 输入法也一样(只编译,不注册;想试用输入法请双击 5-试用输入法.bat)。
+& (Join-Path $PSScriptRoot "build-ime.ps1")
 cargo tauri dev
 
 Write-Host ""

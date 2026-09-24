@@ -145,8 +145,9 @@ pub struct Wallpaper {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Sensors {
-    /// LibreHardwareMonitor's built-in web server. Run LHM as administrator
-    /// with "Remote Web Server" enabled for fan RPM and board temperatures.
+    /// Fallback only. Sensors come from EarthDesk's own hardware monitor
+    /// service over a named pipe; this external LibreHardwareMonitor web
+    /// server is asked only when that service does not answer.
     #[serde(default = "default_lhm")]
     pub lhm_url: String,
     #[serde(default = "default_sample_ms")]

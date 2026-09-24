@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="color-scheme" content="light dark" />
+<title>剪贴板历史</title>
+<link rel="stylesheet" href="clip.css" />
+</head>
+<body>
+  <header>
+    <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><input id="q" type="text" placeholder="搜索剪贴板历史" spellcheck="false" autocomplete="off" /></div>
+    <nav id="kinds">
+      <button data-kind="" class="on">全部</button><button data-kind="text">文本</button><button data-kind="image">图片</button><button data-kind="files">文件</button><button data-kind="pinned">收藏</button>
+    </nav>
+    <div class="tools manager-only">
+      <button id="openFolder" class="plain">打开文件夹</button>
+      <button id="clearAll" class="plain danger">清空（保留收藏）</button>
+    </div>
+  </header>
+  <main>
+    <ul id="list" role="listbox"></ul>
+    <section id="detail" class="manager-only"></section>
+  </main>
+  <footer class="panel-only">
+    <span>Enter 粘贴 · Shift+Enter 纯文本 · Ctrl+1…9 · Ctrl+P 收藏 · Ctrl+T 贴到屏幕</span>
+    <button id="manage" class="plain">管理…</button>
+  </footer>
+  <div id="toast"></div>
+  <script type="module" src="clip.js"></script>
+</body>
+</html>

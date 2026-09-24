@@ -24,17 +24,24 @@ let drag = null;
 const DESIGN = { weather: [440, 440], perf: [440, 440] }[label] || [440, 440];
 
 let uiScale = 1;
+/// Extra shrink a page can ask for when its content outgrows the card (the
+/// performance card with a pile of drives plugged in). 1 = none.
+let contentFit = 1;
 
 function rescale() {
   // Whichever dimension is tighter wins, so a widget dragged short-and-wide
   // (or tall-and-narrow) shrinks to fit rather than spilling out of its box.
   const fit = Math.min(window.innerWidth / DESIGN[0], window.innerHeight / DESIGN[1]);
-  const size = Math.max(7, fit * 16 * uiScale);
+  const size = Math.max(7, fit * 16 * uiScale * contentFit);
   document.documentElement.style.fontSize = `${size}px`;
 }
 
 rescale();
 window.addEventListener("resize", rescale);
+window.__widgetFit = (value) => {
+  contentFit = Math.min(1, Math.max(0.5, Number(value) || 1));
+  rescale();
+};
 // Moving between monitors with different scaling changes the CSS size without
 // firing `resize` on every platform; observing the element catches both.
 new ResizeObserver(rescale).observe(document.documentElement);

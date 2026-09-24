@@ -1,0 +1,167 @@
+/* The capture screen: the frozen desktop, dimmed outside the selection, with
+   Snipaste-style chrome. Everything is positioned in CSS pixels; capture.js
+   converts from physical pixels (÷ devicePixelRatio). */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  user-select: none;
+  -webkit-user-select: none;
+  font: 12px/1.35 "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  cursor: crosshair;
+}
+[hidden] { display: none !important; }
+canvas#base, canvas#ann { position: absolute; left: 0; top: 0; }
+canvas#ann { pointer-events: none; }
+
+:root {
+  --accent: #1e90ff;
+  --dim: rgba(0, 0, 0, 0.38);
+}
+
+#shade { position: absolute; inset: 0; background: var(--dim); pointer-events: none; }
+body.has-box #shade { display: none; }
+
+/* Hover highlight and selection both cut their hole in the dimming with a
+   huge spread shadow, so no full-screen canvas has to be redrawn. */
+#hl, #sel {
+  position: absolute;
+  pointer-events: none;
+  box-shadow: 0 0 0 100000px var(--dim);
+}
+#hl { border: 2px solid var(--accent); transition: left 60ms, top 60ms, width 60ms, height 60ms; }
+body.selecting #hl, body.selected #hl { display: none; }
+#sel { outline: 1px solid var(--accent); }
+#sel .h {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  background: var(--accent);
+  border: 1px solid #fff;
+  border-radius: 1px;
+  pointer-events: auto;
+}
+body.locked #sel .h { display: none; }
+#sel .h[data-h="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+#sel .h[data-h="n"] { left: 50%; top: 0; cursor: ns-resize; }
+#sel .h[data-h="ne"] { left: 100%; top: 0; cursor: nesw-resize; }
+#sel .h[data-h="e"] { left: 100%; top: 50%; cursor: ew-resize; }
+#sel .h[data-h="se"] { left: 100%; top: 100%; cursor: nwse-resize; }
+#sel .h[data-h="s"] { left: 50%; top: 100%; cursor: ns-resize; }
+#sel .h[data-h="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
+#sel .h[data-h="w"] { left: 0; top: 50%; cursor: ew-resize; }
+
+#size {
+  position: absolute;
+  padding: 2px 7px;
+  border-radius: 4px;
+  color: #fff;
+  background: rgba(20, 20, 22, 0.78);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+#mag {
+  position: absolute;
+  width: 128px;
+  pointer-events: none;
+  background: rgba(20, 20, 22, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+#mag canvas { display: block; width: 126px; height: 126px; image-rendering: pixelated; }
+#mag .info { padding: 4px 6px 5px; font-variant-numeric: tabular-nums; }
+#mag #magColor { display: flex; align-items: center; gap: 5px; }
+#mag #magColor i { display: inline-block; width: 11px; height: 11px; border: 1px solid rgba(255, 255, 255, 0.7); }
+#mag .keys { margin-top: 2px; color: rgba(255, 255, 255, 0.55); font-size: 10.5px; }
+
+/* toolbar */
+#bar, #sub {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 7px;
+  background: rgba(250, 250, 252, 0.97);
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(0, 0, 0, 0.08);
+  cursor: default;
+  white-space: nowrap;
+}
+#bar button, #sub button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #333;
+  cursor: pointer;
+}
+#bar button:hover, #sub button:hover { background: rgba(0, 0, 0, 0.07); }
+#bar button.on { background: rgba(30, 144, 255, 0.16); color: var(--accent); }
+#bar button:disabled { opacity: 0.3; cursor: default; background: transparent; }
+#bar button svg { width: 19px; height: 19px; }
+#bar .sep { width: 1px; height: 20px; background: rgba(0, 0, 0, 0.12); margin: 0 4px; }
+#bar button.ok { color: #1a9f45; }
+#bar button.cancel { color: #e5484d; }
+
+#sub { gap: 6px; padding: 5px 8px; }
+#sub .sizes { display: flex; gap: 2px; }
+#sub .sizes button { width: 26px; height: 26px; }
+#sub .sizes button i { display: block; border-radius: 50%; background: #444; }
+#sub .sizes button.on { background: rgba(30, 144, 255, 0.16); }
+#sub .sizes button.on i { background: var(--accent); }
+#sub .colors { display: grid; grid-template-columns: repeat(5, 16px); gap: 3px; }
+#sub .colors button { width: 16px; height: 16px; border-radius: 3px; border: 1px solid rgba(0, 0, 0, 0.2); padding: 0; }
+#sub .colors button.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+#sub .current {
+  width: 30px;
+  height: 30px;
+  border-radius: 5px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  position: relative;
+  overflow: hidden;
+}
+#sub .current input { position: absolute; inset: -6px; width: 42px; height: 42px; border: 0; padding: 0; cursor: pointer; opacity: 0; }
+#sub .sep { width: 1px; height: 22px; background: rgba(0, 0, 0, 0.12); }
+#sub .toggle { width: auto !important; padding: 0 8px; font-size: 12px; color: #333; }
+#sub .toggle.on { background: rgba(30, 144, 255, 0.16); color: var(--accent); }
+#sub .label { color: #666; font-size: 12px; }
+
+#edit {
+  position: absolute;
+  min-width: 8px;
+  padding: 0;
+  outline: 1px dashed var(--accent);
+  white-space: pre;
+  line-height: 1.25;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+  caret-color: currentColor;
+  font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+}
+
+#hint {
+  position: absolute;
+  left: 50%;
+  top: 18px;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border-radius: 7px;
+  color: #fff;
+  background: rgba(20, 20, 22, 0.8);
+  pointer-events: none;
+  font-size: 13px;
+}
+
+body.move, body.move * { cursor: move !important; }
+body.busy, body.busy * { cursor: progress !important; }

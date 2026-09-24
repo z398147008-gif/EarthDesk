@@ -360,7 +360,7 @@ void main() {
       // The reference's limb is brighter and wider than physics gives (its
       // rim is stylised). Keep a share of the painted rim and bloom on top
       // of the physical scattering.
-      additive += outer * (tight * 0.35 + wide * 1.1) * twilight;
+      additive += outer * (tight * 0.20 + wide * 1.1) * twilight;
     }
   }
   vec3 atmoT = vec3(1.0);
@@ -408,10 +408,14 @@ void main() {
     float t = tHit;
     if (t > 0.0) {
 
-      vec3 dayCol   = textureGrad(uDay,    suv, ddx, ddy).rgb;
+      // v19: seen edge-on, the maps' fine detail (snow on ridges, relief)
+      // is squeezed into streaks a pixel tall. The reference is soft there.
+      float edgeSoft = smoothstep(0.35, 0.04, clamp(dot(n, -dir), 0.0, 1.0));
+      float lodK = 1.0 + 2.0 * edgeSoft;
+      vec3 dayCol   = textureGrad(uDay,    suv, ddx * lodK, ddy * lodK).rgb;
       vec3 nightCol = textureGrad(uNight,  suv, ddx, ddy).rgb;
       float water   = textureGrad(uWater,  suv, ddx, ddy).r;
-      vec3 nmap     = textureGrad(uNormalMap, suv, ddx, ddy).rgb * 2.0 - 1.0;
+      vec3 nmap     = textureGrad(uNormalMap, suv, ddx * lodK, ddy * lodK).rgb * 2.0 - 1.0;
 
       // Tangent frame: x east, y north. The relief map is generated from the
       // GEBCO elevation grid in exactly that convention (see tools/), so the
@@ -421,7 +425,7 @@ void main() {
       vec3 bumped = normalize(tangent * nmap.x + bitan * nmap.y + n * max(nmap.z, 0.2));
       // Strong relief: most of the "rich" look of the reference is mountain
       // ranges modelled by the light.
-      vec3 N = normalize(mix(n, bumped, 0.9));
+      vec3 N = normalize(mix(n, bumped, 0.9 * (1.0 - 0.6 * edgeSoft)));
 
       float ndl = dot(n, uSun);
       // A wide terminator: the real one is softened by hundreds of kilometres
@@ -489,6 +493,16 @@ void main() {
       // sideways and stacks them into the lumpy grey rim we had; the
       // reference flattens its clouds there and lets the haze take over.
       float limbFlat = smoothstep(0.45, 0.12, muV);
+      // v19 -- the last stretch before the limb, the way the reference treats
+      // it: the cloud map is foreshortened there until every pixel averages a
+      // whole weather system, so the decks merge into one grey sheet and the
+      // procedural detail turns into horizontal streaks. Apple thins the
+      // clouds out and lets them sink into the blue haze instead; the sea
+      // shows through almost to the edge. Read the map softer, drop the
+      // detail, and fade the cover.
+      float muRaw = clamp(dot(n, Vw), 0.0, 1.0);
+      float limbFade = smoothstep(0.55, 0.06, muRaw);
+      blurK *= mix(1.0, 3.0, limbFade);
       vec3 offW = vT / muV * h0 * HMAX * (1.0 - 0.80 * limbFlat);
       cuv += vec2(dot(offW, east) / (coslat * TAU), -dot(offW, north) / PI);
       vec3 cloudRGB = textureGrad(uClouds, cuv, ddx * blurK, ddy * blurK).rgb;
@@ -520,6 +534,7 @@ void main() {
       float wispy = det * 0.55 + fine * 0.45;
       float shapeN = mix(wispy, billow, conv);
       float erode = (1.0 - shapeN) * mix(0.55, 0.80, conv) * uCloudDetail;
+      erode *= 1.0 - 0.85 * limbFade;
       // At night the reference's clouds are soft grey masses; no lobes.
       erode *= mix(0.35, 1.0, day);
       float body = clamp((base - erode) / max(1.0 - erode, 0.05), 0.0, 1.0);
@@ -551,7 +566,11 @@ void main() {
       // or cold surfaces fool both channels); keep it light there.
       veil *= mix(0.3, 1.0, water);
       veil *= mix(0.25, 1.0, day);          // thin cloud barely shows at night
+      veil *= 1.0 - limbFade;               // streak noise aliases edge-on
       float cloud = clamp(bodyA + veil * 0.42, 0.0, 1.0) * uCloudOpacity;
+      // Thinner toward the edge: from about 55 degrees off vertical the cover
+      // eases off to under a third by the limb, so decks do not pile up there.
+      cloud *= 1.0 - 0.70 * pow(limbFade, 1.5);
 
       // Cloud-top relief: the same detail field sampled a step toward the sun.
       // Where it falls away the top faces the light; where it rises it is in
@@ -689,7 +708,10 @@ void main() {
       cloudCol *= cloudLightC / max(cloudLight, 1e-3);   // tint by the light's colour
       // Toward the limb the clouds turn into the pale, even veil the
       // reference shows there: no relief, no grey folds, no stacking.
-      cloudCol = mix(cloudCol, vec3(0.94, 0.96, 1.00) * mix(0.55, 1.0, day), limbFlat * 0.75);
+      // v19: not a neutral grey-white -- measured on the reference, cloud a
+      // few pixels from the limb is a blue-grey (0.70 : 0.90 : 1.0), the
+      // colour of the air in front of it, and no brighter than the sea's haze.
+      cloudCol = mix(cloudCol, vec3(0.66, 0.82, 0.96) * mix(0.55, 1.0, day), limbFlat * 0.85);
       // At night clouds are only a faint grey hint, as in the reference.
       surface = mix(surface, cloudCol * cloudLight, cloud * mix(0.40, 1.0, day));
       // Cities light the underside of the cloud deck above them.
@@ -744,6 +766,14 @@ void main() {
         surface = surface * mix(vec3(1.0), tG, uAtmoExtinction);
       }
 
+      // v19: the reference lets the last stretch of ground sink into a
+      // blue-grey haze (measured ~(100,128,153) a few pixels in from the
+      // edge): land colour, snow and relief fade out together, so nothing
+      // bright or textured piles up against the limb.
+      float edgeHaze = pow(limbFade, 1.5) * max(airDay, 0.15);
+      vec3 hazeTone = mix(vec3(0.14, 0.18, 0.24), vec3(0.34, 0.48, 0.62), airDay);
+      surface = mix(surface, hazeTone, edgeHaze * 0.45);
+
       // Feather the silhouette into the haze instead of ending on a hard
       // circle. The glow above is still being added outside it, so the two
       // meet in the middle.
@@ -787,7 +817,7 @@ void main() {
     // used to -- in the reference you can still read coastlines a pixel or
     // two from the silhouette, and only the very last sliver goes to haze.
     float inner = exp(-max(-hL, 0.0) / (wIn * 0.85));
-    surface = mix(surface, pale * (0.72 + 0.28 * lit), min(inner * 1.3, 1.0) * 0.80 * mix(0.35, 1.0, lit));
+    surface = mix(surface, pale * (0.72 + 0.28 * lit), min(inner * 1.3, 1.0) * 0.55 * mix(0.35, 1.0, lit));
     // Anti-aliased silhouette: a couple of pixels, never less.
     float aa = 1.0 - smoothstep(-1.5 * px, 1.5 * px, hL);
     coverage = max(min(coverage, aa), 0.0);
@@ -797,7 +827,7 @@ void main() {
     // as air rather than as a drawn outline. Two falloffs carry it: a tight
     // one hugging the silhouette and a broad halo, each with its own colour.
     float o = max(hL, 0.0);
-    float aNear = exp(-o / (wIn * 1.9)) * 0.22;
+    float aNear = exp(-o / (wIn * 1.9)) * 0.13;
     float aFar = exp(-o / wOut) * 0.52;
     // Four stops, measured up a column of the reference's air: white at the
     // silhouette, pale cyan-white, a clear cyan, then a deep cyan-blue that

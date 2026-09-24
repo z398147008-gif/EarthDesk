@@ -397,16 +397,29 @@ mod imp {
 
     /// Is one of the shell's desktop windows stacked above this top-level
     /// window?
+    ///
+    /// Walked from the *top* of the z-order down to `h`, with no small cap.
+    /// The first version walked up from `h` and gave up after 512 windows --
+    /// but a widget parked with HWND_BOTTOM sits under every invisible
+    /// top-level window on the system (tooltips, IME and message-only
+    /// helpers, one or more per running program), and after a day of uptime
+    /// with a browser, a download manager and a video player open there are
+    /// easily more than 512 of those between it and the desktop. The walk then
+    /// ran out before reaching the desktop, answered "no", and Show Desktop
+    /// left the widgets buried (watchdog.log: desktop_showing=true,
+    /// desktop_above=false, lifts never increasing). Going top-down, the
+    /// desktop windows are near the start of the walk whenever they matter.
     unsafe fn desktop_above(h: isize) -> bool {
-        let mut above = GetWindow(h, GW_HWNDPREV);
-        for _ in 0..512 {
-            if above == 0 {
-                return false;
+        let mut w = GetTopWindow(0);
+        let mut desktop_seen = false;
+        for _ in 0..65_536 {
+            if w == 0 || w == h {
+                return desktop_seen && w == h;
             }
-            if IsWindowVisible(above) != 0 && is_desktop_class(above) {
-                return true;
+            if !desktop_seen && IsWindowVisible(w) != 0 && is_desktop_class(w) {
+                desktop_seen = true;
             }
-            above = GetWindow(above, GW_HWNDPREV);
+            w = GetWindow(w, GW_HWNDNEXT);
         }
         false
     }
@@ -436,7 +449,7 @@ mod imp {
     /// either no app is open or Show Desktop is in effect.
     unsafe fn showing_raw(mates: &[isize]) -> bool {
         let mut w = GetTopWindow(0);
-        for _ in 0..1024 {
+        for _ in 0..65_536 {
             if w == 0 {
                 return false;
             }

@@ -1,0 +1,98 @@
+# 编译地球桌面输入法用的日语引擎：Mozc 的转换引擎封装成 earthdesk_mozc.dll
+# （ime/mozc/earthdesk_mozc.cc），并发布到本仓库的 Release「mozc-<Mozc 版本>」。
+# tools/fetch-ime.ps1 从那里下载。
+#
+# 触发：推送了 ime/mozc/ 或本文件；或者在 GitHub 网页 Actions → 「Mozc for
+# 地球桌面输入法」→ Run workflow 手动运行。大约 40–60 分钟。
+
+name: Mozc for 地球桌面输入法
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ime/mozc/**"
+      - ".github/workflows/mozc.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mozc
+  cancel-in-progress: true
+
+env:
+  # Mozc 的版本固定在这里；升级时改这一行。
+  MOZC_COMMIT: 13c98988247aa711d99db9e348ec2a597d14b5cd
+
+jobs:
+  windows_x64:
+    runs-on: windows-2025
+    timeout-minutes: 150
+    steps:
+      - name: Checkout EarthDesk
+        uses: actions/checkout@v4
+        with:
+          path: earthdesk
+          persist-credentials: false
+
+      - name: Checkout Mozc
+        uses: actions/checkout@v4
+        with:
+          repository: google/mozc
+          ref: ${{ env.MOZC_COMMIT }}
+          path: mozc
+          submodules: false
+          persist-credentials: false
+
+      - name: Restore Mozc deps cache
+        uses: actions/cache@v4
+        with:
+          path: mozc/src/third_party_cache
+          key: mozc-deps-${{ env.MOZC_COMMIT }}
+
+      - name: Mozc build dependencies (LLVM, MSYS2; no Qt / WiX / NDK)
+        shell: cmd
+        working-directory: .\mozc\src
+        run: python build_tools/update_deps.py --noqt --nowix --nondk
+
+      - name: Build earthdesk_mozc.dll
+        shell: cmd
+        env:
+          ANDROID_NDK_HOME: ""
+        run: python earthdesk\ime\mozc\build.py mozc --out out
+
+      - name: Package (DLL + the Visual C++ runtime it links to)
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe | Where-Object { $_.FullName -match "Hostx64\\x64" } | Select-Object -First 1
+          if ($dumpbin) { & $dumpbin.FullName /nologo /dependents out\earthdesk_mozc.dll }
+          # App-local copies of the redistributable runtime (allowed by its
+          # licence); harmless if the DLL turns out not to need them.
+          foreach ($f in "msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll") {
+            $p = Join-Path $env:WINDIR "System32\$f"
+            if (Test-Path $p) { Copy-Item $p out\ }
+          }
+          Copy-Item mozc\LICENSE out\LICENSE-mozc.txt
+          Compress-Archive -Path out\* -DestinationPath earthdesk_mozc.zip -Force
+          $hash = (Get-FileHash earthdesk_mozc.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  earthdesk_mozc.zip" | Out-File -Encoding ascii earthdesk_mozc.zip.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: earthdesk_mozc
+          path: earthdesk_mozc.zip
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "mozc-" + $env:MOZC_COMMIT.Substring(0, 7)
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --title "Mozc $($env:MOZC_COMMIT.Substring(0,7)) for 地球桌面输入法" --notes "Mozc (BSD-3-Clause, https://github.com/google/mozc) commit $env:MOZC_COMMIT, built by .github/workflows/mozc.yml. Used by tools/fetch-ime.ps1."
+          }
+          gh release upload $tag earthdesk_mozc.zip earthdesk_mozc.zip.sha256 --repo $env:GITHUB_REPOSITORY --clobber

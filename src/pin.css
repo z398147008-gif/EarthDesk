@@ -1,0 +1,35 @@
+/* A pinned image: the picture with a soft glow around it (blue while the
+   pin has focus, like Snipaste), on a transparent window. The window is the
+   picture plus a margin wide enough for the glow. */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; user-select: none; -webkit-user-select: none; }
+body { font: 12px/1.3 "Segoe UI", "Microsoft YaHei UI", sans-serif; cursor: default; }
+[hidden] { display: none !important; }
+
+#frame {
+  position: absolute;
+  left: var(--pad);
+  top: var(--pad);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18), 0 2px 7px 1px rgba(0, 0, 0, 0.32);
+  transition: box-shadow 120ms ease;
+  background: #fff;
+}
+body.focus #frame { box-shadow: 0 0 0 1px rgba(30, 144, 255, 0.95), 0 0 7px 2px rgba(30, 144, 255, 0.55); }
+body.through #frame { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12); }
+#view { display: block; width: 100%; height: 100%; }
+body.pixelated #view { image-rendering: pixelated; }
+
+#badge {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 4px 10px;
+  border-radius: 6px;
+  color: #fff;
+  background: rgba(20, 20, 22, 0.8);
+  pointer-events: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}

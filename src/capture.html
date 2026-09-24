@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>截图</title>
+<link rel="stylesheet" href="capture.css" />
+</head>
+<body class="idle">
+  <canvas id="base"></canvas>
+  <canvas id="ann"></canvas>
+  <div id="shade"></div>
+  <div id="hl"></div>
+  <div id="sel" hidden>
+    <div class="h" data-h="nw"></div><div class="h" data-h="n"></div><div class="h" data-h="ne"></div>
+    <div class="h" data-h="e"></div><div class="h" data-h="se"></div><div class="h" data-h="s"></div>
+    <div class="h" data-h="sw"></div><div class="h" data-h="w"></div>
+  </div>
+  <div id="size" hidden></div>
+  <div id="mag" hidden>
+    <canvas width="126" height="126"></canvas>
+    <div class="info"><div id="magPos"></div><div id="magColor"><i></i><span></span></div><div class="keys">C 复制颜色 · Shift 切换格式</div></div>
+  </div>
+  <div id="bar" hidden></div>
+  <div id="sub" hidden></div>
+  <div id="edit" contenteditable="plaintext-only" spellcheck="false" hidden></div>
+  <div id="hint" hidden></div>
+  <script type="module" src="capture.js"></script>
+</body>
+</html>

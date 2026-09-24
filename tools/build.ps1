@@ -19,6 +19,25 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 
 $root = Join-Path $PSScriptRoot ".."
 Set-Location $root
+
+# 内置的硬件监控服务(温度、风扇、显卡):先编译好,打包时会一起装进去。
+& (Join-Path $PSScriptRoot "build-sensors.ps1")
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "  硬件监控服务没有准备好,停止打包。把上面的提示截图发给我。" -ForegroundColor Yellow
+    Read-Host "`n按回车关闭"
+    exit 1
+}
+
+# 地球桌面输入法(引擎 + 64/32 位输入法模块 + 词库):同样先编译好一起装进去。
+& (Join-Path $PSScriptRoot "build-ime.ps1")
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "  输入法没有准备好,停止打包。把上面的提示截图发给我。" -ForegroundColor Yellow
+    Read-Host "`n按回车关闭"
+    exit 1
+}
+
 cargo tauri build
 
 $ok = ($LASTEXITCODE -eq 0)

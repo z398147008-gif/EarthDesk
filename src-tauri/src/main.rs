@@ -1,10 +1,16 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
+mod capture;
+mod cliphist;
 mod config;
+mod pins;
 mod environment;
+mod ime;
 mod platform;
+mod recycle;
 mod snap;
 mod sysmon;
+mod toolkit;
 mod wallpaper;
 mod weather;
 
@@ -233,28 +239,43 @@ fn set_location(app: AppHandle, state: State<AppState>, location: config::Locati
     Ok(())
 }
 
-/// Is the bundled hardware monitor there, and is it answering?
+/// Everything the settings page shows about the hardware monitor.
 #[tauri::command]
-async fn lhm_status(app: AppHandle) -> Value {
-    let url = {
-        let state = app.state::<AppState>();
-        let u = state.config.lock().map(|c| c.sensors.lhm_url.clone()).unwrap_or_default();
-        u
-    };
-    let bundled = environment::bundled_lhm(app.path().resource_dir().ok()).is_some();
-    let running = tauri::async_runtime::spawn_blocking(move || environment::lhm_reachable(&url))
-        .await
-        .unwrap_or(false);
-    serde_json::json!({ "bundled": bundled, "running": running })
+async fn sensors_status(app: AppHandle) -> Value {
+    let (state, pawnio, dotnet) = tauri::async_runtime::spawn_blocking(|| {
+        (environment::service_state(), environment::pawnio_installed(), environment::dotnet_ok())
+    })
+    .await
+    .unwrap_or((environment::ServiceState::Unknown, false, true));
+    let can_repair = environment::setup_script(app.path().resource_dir().ok()).is_some();
+    let last = app.state::<AppState>().sysmon.lock().ok().and_then(|s| s.clone());
+    let pick = |k: &str| last.as_ref().and_then(|v| v.get(k)).cloned().unwrap_or(Value::Null);
+    serde_json::json!({
+        "service": state.as_str(),
+        "can_repair": can_repair,
+        "pawnio": pawnio,
+        "dotnet": dotnet,
+        "reading": last.as_ref().and_then(|v| v.get("lhm")).and_then(Value::as_bool).unwrap_or(false),
+        "alive": last.as_ref().and_then(|v| v.get("sensor_alive")).and_then(Value::as_bool).unwrap_or(false),
+        "source": pick("sensor_source"),
+        "hardware": pick("hardware"),
+        "error": pick("lhm_error"),
+    })
 }
 
-/// One-click repair from the settings page (one UAC prompt).
+/// Repair from the settings page: re-run the installer's setup for the
+/// hardware monitor (driver, service, permissions). One UAC prompt; returns
+/// once it has finished.
 #[tauri::command]
-fn lhm_repair(app: AppHandle) -> Result<(), String> {
-    match environment::bundled_lhm(app.path().resource_dir().ok()) {
-        Some(exe) => environment::repair_lhm(&exe),
-        None => Err("没有找到内置的硬件监控组件，请重新安装地球桌面".into()),
-    }
+async fn sensors_repair(app: AppHandle) -> Result<(), String> {
+    let Some(script) = environment::setup_script(app.path().resource_dir().ok()) else {
+        return Err("没有找到硬件监控组件，请重新安装地球桌面".into());
+    };
+    let result = tauri::async_runtime::spawn_blocking(move || environment::repair(&script))
+        .await
+        .map_err(|e| e.to_string())?;
+    watchdog_log(&format!("sensors repair: {result:?}"));
+    result
 }
 
 #[tauri::command]
@@ -264,33 +285,47 @@ fn open_url(url: String) -> Result<(), String> {
 
 #[tauri::command]
 fn get_autostart() -> bool {
+    #[cfg(windows)]
+    return toolkit::win::elevation::autostart_enabled();
+    #[cfg(not(windows))]
     environment::autostart_enabled()
 }
 
+/// Starting with Windows goes through the elevated scheduled task when the
+/// app runs as administrator (see toolkit/win/elevation.rs), otherwise
+/// through the HKCU Run value as before.
 #[tauri::command]
-fn set_autostart(on: bool) -> Result<(), String> {
-    environment::set_autostart(on)
+async fn set_autostart(on: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(windows)]
+        return toolkit::win::elevation::set_autostart(on, toolkit::current().elevate);
+        #[cfg(not(windows))]
+        environment::set_autostart(on)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-/// Make sure the hardware monitor is up a few seconds after start. The
-/// installer registered a logon task for it; this covers a first start right
-/// after installing, or the monitor having been closed from its tray icon.
-fn spawn_environment_check(app: AppHandle) {
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(4));
-        let url = {
-            let state = app.state::<AppState>();
-            let u = state.config.lock().map(|c| c.sensors.lhm_url.clone()).unwrap_or_default();
-            u
-        };
-        if environment::lhm_reachable(&url) {
-            return;
+/// Toolkit built-ins that need the app's own windows. Called on the main
+/// thread by toolkit::run_app_builtin.
+fn toolkit_app_builtin(app: &AppHandle, name: &str, target: isize) {
+    match name {
+        "capture" => capture::start(app),
+        "pin_clipboard" => {
+            // F3 inside the capture screen pins the selection instead.
+            if capture::busy() {
+                capture::forward_pin(app);
+            } else {
+                pins::from_clipboard(app)
+            }
         }
-        if environment::bundled_lhm(app.path().resource_dir().ok()).is_some() {
-            let ok = environment::start_lhm_task();
-            watchdog_log(&format!("hardware monitor not answering; started logon task: {ok}"));
-        }
-    });
+        "hide_pins" => pins::toggle_hidden(app),
+        "clipboard_panel" => cliphist::open_panel(app, target),
+        "clipboard_history" => cliphist::open_manager(app),
+        "edit_mode" => toggle_edit_mode(app),
+        "settings" => show_settings(app),
+        other => toolkit::log(&format!("built-in {other} is not available in this version yet")),
+    }
 }
 
 /// Everything the settings page shows, in one round trip.
@@ -623,11 +658,13 @@ fn spawn_sysmon_loop(app: AppHandle) {
         let mut sampler = sysmon::Sampler::new();
         // The first CPU reading is an average since boot; throw it away.
         let _ = sampler.sample();
+        let mut nurse = SensorNurse::new();
 
         loop {
             tokio::time::sleep(Duration::from_millis(interval)).await;
             let mut snapshot = sampler.sample();
-            sysmon::merge_lhm(&mut snapshot, &url).await;
+            sysmon::merge_sensors(&mut snapshot, &url).await;
+            nurse.check(&mut snapshot).await;
             let Ok(value) = serde_json::to_value(&snapshot) else { continue };
             if let Ok(mut slot) = app.state::<AppState>().sysmon.lock() {
                 *slot = Some(value.clone());
@@ -635,6 +672,80 @@ fn spawn_sysmon_loop(app: AppHandle) {
             let _ = app.emit("sysmon:update", value);
         }
     });
+}
+
+/// Keeps the hardware monitor service alive without bothering anyone.
+///
+/// The service manager already restarts it after a crash. What is left is a
+/// service somebody stopped (or that never started), and one that runs but
+/// has stopped answering. Both can be fixed without elevation -- the
+/// installer lets the signed-in user start and stop this one service -- so
+/// they are fixed here, quietly, with a note in watchdog.log.
+struct SensorNurse {
+    failures: u32,
+    last_start: Option<std::time::Instant>,
+    last_restart: Option<std::time::Instant>,
+    last_state: &'static str,
+}
+
+impl SensorNurse {
+    fn new() -> Self {
+        SensorNurse { failures: 0, last_start: None, last_restart: None, last_state: "" }
+    }
+
+    fn older_than(t: Option<std::time::Instant>, secs: u64) -> bool {
+        t.map_or(true, |t| t.elapsed() >= Duration::from_secs(secs))
+    }
+
+    async fn check(&mut self, snapshot: &mut sysmon::Snapshot) {
+        use environment::ServiceState as S;
+        // Alive is enough: a service that answers "still starting" is doing
+        // its job, and restarting it would only start the wait over.
+        if snapshot.sensor_alive {
+            if self.failures > 0 {
+                watchdog_log(&format!("sensors: service answering again after {} failed samples", self.failures));
+            }
+            self.failures = 0;
+            return;
+        }
+        self.failures += 1;
+        // A sample or two can fail while the service is starting up.
+        if self.failures < 3 {
+            return;
+        }
+        let state = tauri::async_runtime::spawn_blocking(environment::service_state)
+            .await
+            .unwrap_or(S::Unknown);
+        if state.as_str() != self.last_state {
+            self.last_state = state.as_str();
+            watchdog_log(&format!("sensors: service state {}", state.as_str()));
+        }
+        match state {
+            S::Stopped if Self::older_than(self.last_start, 60) => {
+                self.last_start = Some(std::time::Instant::now());
+                let r = tauri::async_runtime::spawn_blocking(environment::start_service).await;
+                watchdog_log(&format!("sensors: service was stopped, started it: {r:?}"));
+            }
+            // Running, yet no answer for a minute and a half: stuck.
+            S::Running if self.failures >= 45 && Self::older_than(self.last_restart, 600) => {
+                self.last_restart = Some(std::time::Instant::now());
+                let r = tauri::async_runtime::spawn_blocking(environment::restart_service).await;
+                watchdog_log(&format!("sensors: service not answering, restarted it: {r:?}"));
+            }
+            _ => {}
+        }
+        if !snapshot.lhm {
+            snapshot.lhm_error = Some(
+                match state {
+                    S::NotInstalled => "硬件监控服务没有安装，请到 设置 → 硬件监控 点“修复”",
+                    S::Starting => "硬件监控服务正在启动…",
+                    S::Stopped | S::Stopping => "硬件监控服务已停止，正在重新启动…",
+                    _ => return,
+                }
+                .to_string(),
+            );
+        }
+    }
 }
 
 /// explorer.exe restarts, a resolution change or "show desktop" can all knock
@@ -820,7 +931,7 @@ fn widget_tick(app: &AppHandle, w: &mut Watch) {
 fn tick_loose(w: &mut Watch, live: &[WebviewWindow], refs: &[&WebviewWindow]) {
     if !w.announced {
         w.announced = true;
-        watchdog_log("start [watchdog v5]: widgets are loose top-level windows (earth off, or z_mode bottom)");
+        watchdog_log("start [watchdog v6]: widgets are loose top-level windows (earth off, or z_mode bottom)");
         for win in live {
             watchdog_log(&format!("start {}: {}", win.label(), platform::chain(win)));
         }
@@ -959,11 +1070,16 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
     let edit = MenuItem::with_id(app, "edit", "编辑模式", true, None::<&str>)?;
+    let suspend = tauri::menu::CheckMenuItem::with_id(app, "suspend", "暂停手势和快捷键", true, false, None::<&str>)?;
     let reload = MenuItem::with_id(app, "reload", "重新载入组件", true, None::<&str>)?;
+    let pins_hide = MenuItem::with_id(app, "pins_hide", "隐藏 / 显示所有贴图", true, None::<&str>)?;
+    let pins_solid = MenuItem::with_id(app, "pins_solid", "取消所有贴图的鼠标穿透", true, None::<&str>)?;
+    let pins_close = MenuItem::with_id(app, "pins_close", "关闭所有贴图", true, None::<&str>)?;
+    let pins_menu = tauri::menu::Submenu::with_items(app, "贴图", true, &[&pins_hide, &pins_solid, &pins_close])?;
     let folder = MenuItem::with_id(app, "config", "打开配置目录", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出地球桌面", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&settings, &edit, &reload, &folder, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&settings, &edit, &suspend, &pins_menu, &reload, &folder, &sep, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("earth-desk")
         .tooltip("地球桌面")
@@ -974,8 +1090,16 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     }
 
     builder
-        .on_menu_event(|app, event| match event.id().as_ref() {
+        .on_menu_event(move |app, event| match event.id().as_ref() {
             "settings" => show_settings(app),
+            "pins_hide" => pins::toggle_hidden(app),
+            "pins_solid" => pins::solid_all(app),
+            "pins_close" => pins::close_all(app),
+            "suspend" => {
+                let on = suspend.is_checked().unwrap_or(false);
+                toolkit::SUSPENDED.store(on, std::sync::atomic::Ordering::SeqCst);
+                toolkit::log(if on { "suspended from the tray" } else { "resumed from the tray" });
+            }
             "edit" => toggle_edit_mode(app),
             "reload" => {
                 for label in WIDGETS.iter().chain(std::iter::once(&wallpaper::LABEL)) {
@@ -994,6 +1118,19 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn main() {
+    // `EarthDesk.exe --setup-task`: the installer (or a copy of us that is
+    // about to relaunch elevated) asking for the scheduled task. No UI.
+    #[cfg(windows)]
+    if let Some(code) = toolkit::win::elevation::setup_mode() {
+        std::process::exit(code);
+    }
+    #[cfg(windows)]
+    if !toolkit::win::elevation::claim_instance() {
+        // Another copy is running (or about to: an elevated one waits for
+        // the unelevated copy that started it to leave).
+        return;
+    }
+
     // No config file yet means this is a fresh install: start with Windows
     // from now on (the settings page can turn it off).
     let first_run = !config::config_path().exists();
@@ -1002,6 +1139,17 @@ fn main() {
         let _ = environment::set_autostart(true);
     }
     let hotkey = cfg.edit_hotkey.clone();
+
+    // Gestures, hotkeys and screenshots only reach elevated windows when we
+    // are elevated too. An installed copy started normally hands over to
+    // the elevated scheduled task and leaves. (Not in `cargo tauri dev`: the
+    // dev runner would lose its child.)
+    let toolkit_cfg = toolkit::preload();
+    #[cfg(windows)]
+    if !cfg!(debug_assertions) && toolkit::win::elevation::relaunch_if_needed(toolkit_cfg.elevate, first_run) {
+        return;
+    }
+    let _ = &toolkit_cfg;
 
     tauri::Builder::default()
         .manage(AppState {
@@ -1041,11 +1189,57 @@ fn main() {
             open_config_dir,
             report_visibility,
             set_location,
-            lhm_status,
-            lhm_repair,
+            sensors_status,
+            sensors_repair,
             get_autostart,
             set_autostart,
-            open_url
+            open_url,
+            toolkit::toolkit_get,
+            toolkit::toolkit_set,
+            toolkit::toolkit_record,
+            toolkit::toolkit_running_apps,
+            toolkit::toolkit_pick_file,
+            toolkit::toolkit_try,
+            toolkit::toolkit_set_elevate,
+            capture::capture_frame,
+            capture::capture_ready,
+            capture::capture_shown,
+            capture::capture_elements,
+            capture::capture_cancel,
+            capture::capture_copy_text,
+            capture::capture_finish,
+            capture::capture_pick_folder,
+            capture::capture_default_dir,
+            capture::capture_nudge,
+            capture::capture_cursor,
+            capture::capture_preset,
+            pins::pin_info,
+            pins::pin_bytes,
+            pins::pin_geometry,
+            pins::pin_show,
+            pins::pin_close,
+            pins::pin_moved,
+            pins::pin_export,
+            pins::pin_edit,
+            pins::pins_toggle_hidden,
+            pins::pins_close_all,
+            cliphist::clip_list,
+            cliphist::clip_get,
+            cliphist::clip_thumb,
+            cliphist::clip_paste,
+            cliphist::clip_copy,
+            cliphist::clip_delete,
+            cliphist::clip_set_pinned,
+            cliphist::clip_clear,
+            cliphist::clip_pin,
+            cliphist::clip_hide_panel,
+            cliphist::clip_open_manager,
+            cliphist::clip_open_folder,
+            ime::ime_status,
+            ime::ime_save,
+            ime::ime_deploy,
+            ime::ime_start,
+            ime::ime_open
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -1128,7 +1322,20 @@ fn main() {
                 eprintln!("could not hook shell events; Show Desktop falls back to polling");
             }
             spawn_widget_watchdog(handle.clone());
-            spawn_environment_check(handle.clone());
+
+            toolkit::on_app_builtin(toolkit_app_builtin);
+            toolkit::init(&handle);
+            capture::init(&handle);
+            cliphist::init(&handle);
+            #[cfg(windows)]
+            std::thread::spawn(|| {
+                toolkit::win::elevation::tidy_after_start();
+                toolkit::log(&format!(
+                    "elevated={} task={}",
+                    toolkit::win::elevation::is_elevated(),
+                    toolkit::win::elevation::task_installed()
+                ));
+            });
             Ok(())
         })
         .on_window_event(|window, event| {

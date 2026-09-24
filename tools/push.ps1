@@ -27,6 +27,30 @@ git remote remove origin 2>$null
 git remote add origin https://github.com/z398147008-gif/EarthDesk.git
 git branch -M main
 
+# git 异常退出时会留下 .git\index.lock,之后所有提交都会失败。没有 git 在运行时把它清掉。
+$lock = Join-Path $root ".git\index.lock"
+if ((Test-Path $lock) -and -not (Get-Process git -ErrorAction SilentlyContinue)) {
+    Remove-Item $lock -Force -ErrorAction SilentlyContinue
+}
+
+# 先把本地的改动记下来(提交),再上传;没有改动就直接上传。
+git add -A
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  记录本地改动失败(上面有原因),这次没有上传。把这个窗口截图发给我。" -ForegroundColor Yellow
+    Read-Host "`n按回车关闭"
+    exit 1
+}
+git diff --cached --quiet
+if ($LASTEXITCODE -ne 0) {
+    git commit -q -m ("更新 " + (Get-Date -Format "yyyy-MM-dd HH:mm"))
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  提交本地改动失败(上面有原因),这次没有上传。把这个窗口截图发给我。" -ForegroundColor Yellow
+        Read-Host "`n按回车关闭"
+        exit 1
+    }
+    Write-Host "  已记录本地改动。" -ForegroundColor Gray
+}
+
 Write-Host "  正在上传(约 25 MB,第一次会弹浏览器让你登录 GitHub)…" -ForegroundColor Gray
 git push -u origin main
 

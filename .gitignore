@@ -1,5 +1,6 @@
 /src-tauri/target/
 /src-tauri/gen/
+/ime/target/
 # 第三方二进制:用 tools/fetch-vendor.ps1 下载,见 THIRD_PARTY.md
 /src-tauri/vendor/
 node_modules/
@@ -7,3 +8,5 @@ node_modules/
 # 贴图的历史备份
 /src/textures/*_v[0-9]*.jpg
 /src/textures/*_old*.jpg
+# 旧图标备份
+/src-tauri/icons/_old/

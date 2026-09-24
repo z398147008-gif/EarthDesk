@@ -165,8 +165,13 @@ function learnFans(s) {
 }
 
 /// LibreHardwareMonitor lists physical drives by model, sysinfo lists volumes
-/// by drive letter. Each LHM drive reports the "Used Space" percentage of its
-/// volumes, which is a fingerprint good enough to pair the two.
+/// by drive letter. Pair them by model name when the backend could read one
+/// from the drive, otherwise by each LHM drive's "Used Space" percentage,
+/// which is a fingerprint good enough to tell drives apart. Pairs are handed
+/// out closest first, so plugging in a drive can't steal another's match just
+/// because its letter comes earlier.
+const squash = (text) => String(text || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
 function diskTemps(s) {
   const drives = new Map();
   for (const r of s.loads || []) {
@@ -176,21 +181,37 @@ function diskTemps(s) {
     const temps = (s.temps || []).filter((t) => t.owner === owner && !/warning|critical|limit|threshold/i.test(t.name));
     d.temp = temps.find((t) => /composite/i.test(t.name)) || temps.find((t) => /^temperature$/i.test(t.name)) || temps[0] || null;
   }
+
+  // USB drives the sensor service read a temperature from directly (their
+  // enclosure hides it from LHM): already keyed by drive letter.
   const out = new Map();
-  const taken = new Set();
+  for (const t of s.temps || []) {
+    const m = /^USB disk ([A-Z]:)$/.exec(t.owner || "");
+    if (m) out.set(m[1], { model: null, temp: t });
+  }
+
+  const candidates = [];
   for (const disk of s.disks || []) {
     if (!disk.total) continue;
     const pct = (disk.used / disk.total) * 100;
-    let best = null;
+    const model = squash(disk.model);
     for (const [owner, d] of drives) {
-      if (taken.has(owner)) continue;
+      const name = squash(owner);
+      const sameModel = model.length >= 4 && (name.includes(model) || model.includes(name));
       const gap = Math.abs(d.used - pct);
-      if (gap < 1.5 && (!best || gap < best.gap)) best = { owner, gap, d };
+      // A model match still has to agree on usage roughly: one physical drive
+      // can carry several volumes with different fill levels, and LHM's
+      // figure is for the whole drive.
+      if (sameModel ? gap < 25 : gap < 1.5) candidates.push({ disk: disk.name, owner, score: sameModel ? gap - 100 : gap, d });
     }
-    if (best) {
-      taken.add(best.owner);
-      out.set(disk.name, { model: best.owner, temp: best.d.temp });
-    }
+  }
+  candidates.sort((a, b) => a.score - b.score);
+
+  const taken = new Set();
+  for (const c of candidates) {
+    if (out.has(c.disk) || taken.has(c.owner)) continue;
+    taken.add(c.owner);
+    out.set(c.disk, { model: c.owner, temp: c.d.temp });
   }
   return out;
 }
@@ -260,15 +281,80 @@ function group(name, pct, stats) {
   </div>`;
 }
 
-function diskRow(disk, info, withTemp) {
+// Small glyphs in front of each drive: solid-state, spinning, or plugged in.
+const DISK_ICONS = {
+  usb: `<svg viewBox="0 0 16 16"><path d="M5.5 1.5h5v4h-5z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4 5.5h8v6.2a2.8 2.8 0 0 1-2.8 2.8H6.8A2.8 2.8 0 0 1 4 11.7z" fill="currentColor"/><path d="M7 3.2h.01M9 3.2h.01" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>`,
+  hdd: `<svg viewBox="0 0 16 16"><rect x="2" y="1.5" width="12" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="7" r="3.2" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="7" r="0.9" fill="currentColor"/><path d="M4.5 12.2h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>`,
+  ssd: `<svg viewBox="0 0 16 16"><rect x="1.5" y="4" width="13" height="8" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="4" y="6.3" width="3.2" height="3.4" rx="0.5" fill="currentColor"/><rect x="8.6" y="6.3" width="3.2" height="3.4" rx="0.5" fill="currentColor"/></svg>`,
+};
+
+// When each drive letter was first seen, so a newly plugged-in drive can fade
+// in -- and keep fading in smoothly if the row is rebuilt mid-animation.
+const firstSeen = new Map();
+let disksSeeded = false;
+const FRESH_MS = 1600;
+
+function freshness(disks) {
+  const now = performance.now();
+  const present = new Set(disks.map((d) => d.name));
+  for (const name of firstSeen.keys()) if (!present.has(name)) firstSeen.delete(name);
+  for (const name of present) if (!firstSeen.has(name)) firstSeen.set(name, disksSeeded ? now : -Infinity);
+  if (disks.length) disksSeeded = true;
+  return (name) => now - firstSeen.get(name);
+}
+
+const escapeHtml = (text) =>
+  String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+function diskRow(disk, info, withTemp, age) {
   const p = disk.total ? Math.max(0, Math.min(100, (disk.used / disk.total) * 100)) : 0;
-  const t = withTemp && info && info.temp ? info.temp : null;
-  const hot = t && tempColor(t.value);
-  return `<div class="disk" title="${info ? info.model : ""}">
-    <span class="n">${disk.name || "磁盘"}</span>
+  // 0 °C is how some drives (and USB bridges) say "no reading"; show nothing.
+  const t = withTemp && info && info.temp && info.temp.value > 0 ? info.temp : null;
+  // Spinning drives wear out fast above ~55 °C, long before CPU-style limits.
+  const hot = t && (disk.kind === "ssd" ? tempColor(t.value) : t.value >= 55);
+  const icon = disk.external ? "usb" : disk.kind === "hdd" ? "hdd" : "ssd";
+  const title = [disk.label, (info && info.model) || disk.model, disk.external ? "外置" : ""].filter(Boolean).join(" · ");
+  const fresh = age < FRESH_MS ? ` fresh" style="animation-delay:-${Math.round(age)}ms` : "";
+  return `<div class="disk${disk.external ? " external" : ""}${fresh}" title="${escapeHtml(title)}">
+    <span class="i">${DISK_ICONS[icon]}</span>
+    <span class="n">${escapeHtml(disk.name || "磁盘")}</span>
     <span class="track"><span style="width:${p.toFixed(1)}%;background:${loadColor(p)}"></span></span>
     <span class="v"><b>${bytes(disk.used)}</b> / ${bytes(disk.total)}</span>
     <span class="t ${hot ? "hot" : ""}">${t ? `${t.value.toFixed(0)}°` : ""}</span>
+  </div>`;
+}
+
+/// Sizes that can be tiny (a recycle bin with one file in it): GB like the
+/// drives once it is that big, MB / KB below.
+function smallBytes(value) {
+  if (!value) return "0";
+  if (value >= 1024 ** 3) return bytes(value);
+  const mb = value / 1024 ** 2;
+  if (mb >= 100) return `${mb.toFixed(0)} MB`;
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(value / 1024))} KB`;
+}
+
+const TRASH_ICON = `<svg viewBox="0 0 16 16"><path d="M2.5 4h11M6.2 4V2.6h3.6V4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.8 4l.7 9.2c.05.7.6 1.3 1.3 1.3h4.4c.7 0 1.25-.6 1.3-1.3l.7-9.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M6.6 6.8v5M9.4 6.8v5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>`;
+
+/// The Recycle Bin, on the drives' grid so its bar lines up with theirs:
+/// size against the limit set in its Properties (all drives added up).
+function recycleRow(bin) {
+  const cap = bin.capacity || 0;
+  const p = cap ? Math.max(0, Math.min(100, (bin.size / cap) * 100)) : 0;
+  const perDrive = (bin.drives || [])
+    .map((d) => `${d.name} ${smallBytes(d.size)}${d.capacity ? ` / ${bytes(d.capacity)}` : ""} · ${d.items} 项`);
+  const title = [`回收站:${bin.items} 个项目`, ...perDrive, bin.approx ? "上限未设置的盘按 Windows 默认 5% 估算" : ""]
+    .filter(Boolean)
+    .join("\n");
+  const value = bin.items === 0
+    ? `<span class="empty">空</span>${cap ? ` / ${bin.approx ? "约 " : ""}${bytes(cap)}` : ""}`
+    : `<b>${smallBytes(bin.size)}</b>${cap ? ` / ${bin.approx ? "约 " : ""}${bytes(cap)}` : ""}`;
+  return `<div class="disk recycle${bin.items === 0 ? " is-empty" : ""}" title="${escapeHtml(title)}">
+    <span class="i">${TRASH_ICON}</span>
+    <span class="nt"><span class="n">回收站</span><span class="track"><span style="width:${p.toFixed(1)}%;background:${loadColor(p)}"></span></span></span>
+    <span class="v">${value}</span>
+    <span class="t"></span>
   </div>`;
 }
 
@@ -324,9 +410,11 @@ function render(s) {
 
   // Disks, each with its own drive temperature at the end of the row.
   const matched = diskTemps(s);
+  const age = freshness(s.disks || []);
   const disks = isOn("perf.disks")
-    ? (s.disks || []).map((d) => diskRow(d, matched.get(d.name), temps))
+    ? (s.disks || []).map((d) => diskRow(d, matched.get(d.name), temps, age(d.name)))
     : [];
+  if (isOn("perf.recycle") && s.recycle) disks.push(recycleRow(s.recycle));
   el("disks").hidden = disks.length === 0;
   setHtml("disks", disks.join(""));
 
@@ -343,9 +431,43 @@ function render(s) {
   // Only worth a word while something that needs the sensors is switched on.
   const needsSensors = isOn("perf.gpu") || isOn("perf.temps") || isOn("perf.fans");
   el("note").textContent = !s.lhm && needsSensors
-    ? s.lhm_error || "温度、风扇和显卡需要 LibreHardwareMonitor"
+    ? s.lhm_error || "暂时读不到温度、风扇和显卡（设置 → 硬件监控）"
     : "";
+
+  refitIfLayoutChanged();
 }
+
+// --- fitting -----------------------------------------------------------------
+
+/// Every extra drive adds a row. The rings give up their spare height first;
+/// past that the whole card scales down a little instead of cutting off the
+/// bottom rows. Done synchronously, before paint, so nothing flickers.
+let fitKey = "";
+
+function refit() {
+  const card = el("card");
+  if (!window.__widgetFit || !card.clientHeight) return;
+  let fit = 1;
+  window.__widgetFit(1);
+  for (let i = 0; i < 4; i++) {
+    const over = card.scrollHeight / card.clientHeight;
+    if (over <= 1.002) break;
+    fit = Math.max(0.5, (fit / over) * 0.99);
+    window.__widgetFit(fit);
+  }
+}
+
+function refitIfLayoutChanged() {
+  const key = ["rings", "disks", "sensors"]
+    .map((id) => `${el(id).hidden ? 0 : el(id).children.length}`)
+    .concat(el("note").textContent ? "n" : "")
+    .join("|");
+  if (key === fitKey) return;
+  fitKey = key;
+  refit();
+}
+
+new ResizeObserver(() => refit()).observe(el("card"));
 
 // --- wiring ------------------------------------------------------------------
 

@@ -29,6 +29,7 @@ const PIECES = [
       { key: "perf.gpu", title: "显卡", desc: "占用、显存、功耗与频率" },
       { key: "perf.memory", title: "内存", desc: "内存与交换空间" },
       { key: "perf.disks", title: "磁盘", desc: "各分区的容量" },
+      { key: "perf.recycle", title: "回收站", desc: "回收站里文件的大小,和它的上限(回收站属性里设置)" },
       { key: "perf.temps", title: "温度", desc: "显示在 CPU、显卡和每块硬盘后面" },
       { key: "perf.fans", title: "风扇", desc: "显卡风扇归显卡,其余为机箱风扇;没接的不显示" },
     ],
@@ -305,51 +306,171 @@ async function loadGeo() {
 }
 
 // --- hardware monitor -------------------------------------------------------
+//
+// Everything here runs by itself (see SensorNurse in main.rs). The page only
+// reports, and offers the one thing that needs the user: a repair, which
+// asks Windows for administrator rights.
 
-const lhmBadge = document.getElementById("lhmBadge");
-const lhmDesc = document.getElementById("lhmDesc");
-const lhmRepair = document.getElementById("lhmRepair");
-let lhmTimer = null;
+const hwBadge = document.getElementById("hwBadge");
+const hwDesc = document.getElementById("hwDesc");
+const hwRepair = document.getElementById("hwRepair");
+const hwFoundRow = document.getElementById("hwFoundRow");
+const hwFound = document.getElementById("hwFound");
+const hwNoteRow = document.getElementById("hwNoteRow");
+const hwNote = document.getElementById("hwNote");
+let repairing = false;
 
-async function refreshLhm() {
-  const st = await invoke("lhm_status").catch(() => null);
-  if (!st) return null;
-  lhmBadge.classList.toggle("ok", st.running);
-  lhmBadge.classList.toggle("bad", !st.running);
-  if (st.running) {
-    lhmBadge.textContent = "运行中";
-    lhmDesc.textContent = "由内置的 LibreHardwareMonitor 提供，开机自动在后台运行。";
-  } else if (st.bundled) {
-    lhmBadge.textContent = "未运行";
-    lhmDesc.textContent = "点“一键修复”，在 Windows 弹窗里点“是”。详见下方说明。";
-  } else {
-    lhmBadge.textContent = "未安装";
-    lhmDesc.textContent = "这个版本没有内置硬件监控；可自行运行 LibreHardwareMonitor 并开启 8085 端口的 Web 服务器。";
+const HW_NAMES = {
+  Cpu: "处理器",
+  GpuNvidia: "显卡",
+  GpuAmd: "显卡",
+  GpuIntel: "显卡",
+  Motherboard: "主板",
+  Memory: "内存",
+  Storage: "硬盘",
+  Cooler: "散热器",
+  EmbeddedController: "EC",
+  Psu: "电源",
+};
+
+/// ["Cpu: Intel Core i7-13700KF", "Storage: WD ...", ...] -> chips, one per
+/// kind, "硬盘 ×2", the model names in the tooltip.
+function renderHardware(list) {
+  const groups = new Map();
+  for (const entry of Array.isArray(list) ? list : []) {
+    const at = entry.indexOf(": ");
+    const kind = at > 0 ? entry.slice(0, at) : entry;
+    const name = at > 0 ? entry.slice(at + 2) : "";
+    const label = HW_NAMES[kind] || kind;
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(name);
   }
-  lhmRepair.hidden = st.running || !st.bundled;
+  hwFound.replaceChildren();
+  for (const [label, names] of groups) {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    // Several drives or graphics cards are worth counting; LibreHardwareMonitor's
+    // "Generic Memory" + "Virtual Memory" are not two things to the user.
+    const countable = label === "硬盘" || label === "显卡";
+    chip.textContent = countable && names.length > 1 ? `${label} ×${names.length}` : label;
+    chip.title = names.join("\n");
+    hwFound.append(chip);
+  }
+  hwFoundRow.hidden = groups.size === 0;
+  return groups;
+}
+
+function setBadge(text, ok) {
+  hwBadge.textContent = text;
+  hwBadge.classList.toggle("ok", ok === true);
+  hwBadge.classList.toggle("bad", ok === false);
+}
+
+function note(text) {
+  hwNote.textContent = text || "";
+  hwNoteRow.hidden = !text;
+}
+
+async function refreshHw() {
+  const st = await invoke("sensors_status").catch(() => null);
+  if (!st || repairing) return st;
+  const groups = renderHardware(st.source === "service" ? st.hardware : []);
+  let needRepair = false;
+  note("");
+
+  if (!st.dotnet) {
+    setBadge("缺少组件", false);
+    hwDesc.innerHTML = "";
+    hwDesc.append("这台电脑没有 .NET Framework 4.8，硬件监控无法运行。请先");
+    const a = document.createElement("a");
+    a.href = "#";
+    a.dataset.url = "https://dotnet.microsoft.com/zh-cn/download/dotnet-framework/net48";
+    a.textContent = "从微软官网下载安装";
+    hwDesc.append(a, "，装好后回到这里点“修复”。");
+    needRepair = st.can_repair;
+  } else if (st.reading && st.source === "service") {
+    setBadge("正常", true);
+    hwDesc.textContent = "内置的硬件监控服务在后台运行，没有窗口，也不占托盘。";
+    if (!st.pawnio) {
+      note("读取主板温度、风扇和 CPU 温度用的驱动（PawnIO）没有装好，这几项会缺。点“修复”重新安装。");
+      needRepair = st.can_repair;
+    } else if (!groups.has("显卡")) {
+      note("没有识别到显卡。刚开机时显卡驱动可能还没就绪，服务会在一分半钟后再找一次。");
+    }
+  } else if (st.reading && st.source === "lhm") {
+    setBadge("正常", true);
+    hwDesc.textContent = "内置服务没有响应，暂时在用你自己运行的 LibreHardwareMonitor。点“修复”可以换回内置服务。";
+    needRepair = st.can_repair;
+  } else if (st.alive) {
+    setBadge("启动中…", null);
+    hwDesc.textContent = "硬件监控服务在运行，正在识别硬件。通常几秒钟；有硬盘响应很慢时会久一些。";
+  } else {
+    switch (st.service) {
+      case "not_installed":
+        setBadge("未安装", false);
+        hwDesc.textContent = "硬件监控服务还没有安装。点“修复”，在 Windows 弹窗里点“是”。";
+        needRepair = true;
+        break;
+      case "starting":
+        setBadge("启动中…", null);
+        hwDesc.textContent = "硬件监控服务正在启动，通常几秒钟。";
+        break;
+      case "stopped":
+      case "stopping":
+        setBadge("已停止", false);
+        hwDesc.textContent = "服务停止了，地球桌面正在把它重新启动。一直停着的话请点“修复”。";
+        needRepair = true;
+        break;
+      default:
+        setBadge("没有响应", false);
+        hwDesc.textContent = st.error
+          ? `${st.error}。地球桌面会自动重启它；一直这样的话请点“修复”。`
+          : "硬件监控服务没有响应。地球桌面会自动重启它；一直这样的话请点“修复”。";
+        needRepair = true;
+    }
+    if (!st.can_repair) {
+      needRepair = false;
+      note("没有找到内置的硬件监控组件，请重新安装地球桌面。");
+    }
+  }
+  hwRepair.hidden = !needRepair;
   return st;
 }
 
-lhmRepair.addEventListener("click", async () => {
-  lhmRepair.disabled = true;
-  lhmRepair.textContent = "修复中…";
+hwRepair.addEventListener("click", async () => {
+  repairing = true;
+  hwRepair.disabled = true;
+  hwRepair.textContent = "修复中…";
+  setBadge("修复中…", null);
+  hwDesc.textContent = "请在 Windows 弹出的授权窗口里点“是”。安装驱动和服务需要十几秒。";
+  note("");
+  let error = null;
   try {
-    await invoke("lhm_repair");
+    await invoke("sensors_repair");
   } catch (e) {
-    lhmDesc.textContent = String(e);
+    error = String(e);
   }
-  // Poll for up to a minute while the prompt is answered and it starts.
-  clearInterval(lhmTimer);
-  let tries = 0;
-  lhmTimer = setInterval(async () => {
-    const st = await refreshLhm();
-    if ((st && st.running) || ++tries > 20) {
-      clearInterval(lhmTimer);
-      lhmRepair.disabled = false;
-      lhmRepair.textContent = "一键修复";
-    }
-  }, 3000);
+  repairing = false;
+  hwRepair.disabled = false;
+  hwRepair.textContent = "修复";
+  if (error) {
+    await refreshHw();
+    note(error);
+    return;
+  }
+  // Give the service a few samples to come up before judging.
+  hwDesc.textContent = "已修复，正在等待服务响应…";
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const st = await refreshHw();
+    if (st && st.reading && st.source === "service") break;
+  }
 });
+
+// Keep the status current while the window is open.
+setInterval(() => {
+  if (!document.hidden && !repairing) refreshHw();
+}, 4000);
 
 document.addEventListener("click", (event) => {
   const a = event.target.closest("a[data-url]");
@@ -360,7 +481,7 @@ document.addEventListener("click", (event) => {
 
 // Re-check whenever the window comes back into view.
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) refreshLhm();
+  if (!document.hidden) refreshHw();
 });
 
 // --- autostart --------------------------------------------------------------
@@ -379,7 +500,7 @@ autostart.addEventListener("change", async () => {
 async function boot() {
   const [settings] = await Promise.all([invoke("get_settings").catch(() => ({})), loadGeo()]);
   showLocation(settings.location || null);
-  refreshLhm();
+  refreshHw();
   invoke("get_autostart").then((on) => (autostart.checked = on === true)).catch(() => {});
   features = settings.features || {};
   render();

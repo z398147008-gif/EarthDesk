@@ -1,0 +1,23 @@
+# 地球桌面输入法. A workspace of its own (next to src-tauri, not inside it)
+# because its pieces are built for other targets than the app: the TSF DLL
+# for both x64 and x86 (32-bit programs load a 32-bit DLL), the engine for
+# x64. tools/build-ime.ps1 builds all of it into src-tauri/vendor/ime/.
+[workspace]
+resolver = "2"
+members = ["proto", "engine", "tsf"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+windows = "0.61"
+windows-core = "0.61"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+# A panic inside another program's process must not unwind through COM;
+# every entry point catches panics itself, and anything that escapes aborts
+# only the input method's work, never silently corrupts the host.
+panic = "unwind"
