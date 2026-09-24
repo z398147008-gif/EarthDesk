@@ -11,6 +11,7 @@ library to --out (default: ime/mozc/out).
 """
 
 import argparse
+import collections
 import os
 import pathlib
 import platform
@@ -50,6 +51,37 @@ def patch(src: pathlib.Path) -> None:
     build.write_text(text, encoding="utf-8")
 
 
+def annotate(lines) -> None:
+    """On GitHub Actions, put the failure into an error annotation: those
+    can be read without signing in (the raw log cannot)."""
+    if not os.environ.get("GITHUB_ACTIONS"):
+        return
+    text = "\n".join(lines)[-30000:]
+    text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::error title=earthdesk_mozc build failed::{text}", flush=True)
+
+
+def run_logged(cmd, cwd) -> int:
+    """Run, echo everything, and on failure annotate the errors and the tail."""
+    tail = collections.deque(maxlen=60)
+    errors = []
+    try:
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except OSError as e:
+        annotate([f"cannot run {cmd[0]}: {e}"])
+        return 1
+    for raw in p.stdout:
+        line = raw.decode("utf-8", "replace").rstrip()
+        print(line, flush=True)
+        tail.append(line)
+        if ("ERROR" in line or "error:" in line or "error " in line.lower()[:12]) and len(errors) < 60:
+            errors.append(line)
+    code = p.wait()
+    if code != 0:
+        annotate(["--- errors ---", *errors, "--- last lines ---", *tail])
+    return code
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("mozc")
@@ -60,11 +92,17 @@ def main() -> int:
     patch(src)
     name = target_name()
     config = "oss_windows" if os.name == "nt" else "oss_linux"
-    cmd = [args.bazel, "build", f"//session:{name}", "--config", config, "--config", "release_build"]
+    # On Windows the launcher may be bazelisk.exe, .cmd or .bat: resolve it
+    # the way cmd.exe would (a bare name only finds .exe).
+    bazel = shutil.which(args.bazel) or shutil.which("bazel")
+    if bazel is None:
+        annotate([f"{args.bazel} not found on PATH"])
+        return 1
+    cmd = [bazel, "build", f"//session:{name}", "--config", config, "--config", "release_build"]
     print(" ".join(cmd), flush=True)
-    r = subprocess.run(cmd, cwd=src)
-    if r.returncode != 0:
-        return r.returncode
+    code = run_logged(cmd, src)
+    if code != 0:
+        return code
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src / "bazel-bin" / "session" / name, out / name)
@@ -73,4 +111,18 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # The Windows console code page cannot print everything Bazel says.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except BaseException:
+        import traceback
+
+        annotate(traceback.format_exc().splitlines())
+        raise

@@ -31,13 +31,13 @@ jobs:
     timeout-minutes: 150
     steps:
       - name: Checkout EarthDesk
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: earthdesk
           persist-credentials: false
 
       - name: Checkout Mozc
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: google/mozc
           ref: ${{ env.MOZC_COMMIT }}
@@ -46,7 +46,7 @@ jobs:
           persist-credentials: false
 
       - name: Restore Mozc deps cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: mozc/src/third_party_cache
           key: mozc-deps-${{ env.MOZC_COMMIT }}
@@ -80,7 +80,7 @@ jobs:
           "$hash  earthdesk_mozc.zip" | Out-File -Encoding ascii earthdesk_mozc.zip.sha256
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: earthdesk_mozc
           path: earthdesk_mozc.zip
