@@ -333,7 +333,7 @@ void main() {
   // a pale, fairly neutral grey-blue -- nothing like the saturated electric
   // blue a naive Rayleigh tint gives -- and it fades into space over a few
   // percent of the planet's radius rather than stopping at a bright rim.
-  vec3 haze = mix(vec3(0.30, 0.39, 0.50), vec3(0.47, 0.62, 0.82), clamp(sunward * 1.4 + 0.3, 0.0, 1.0));
+  vec3 haze = mix(vec3(0.20, 0.34, 0.62), vec3(0.47, 0.62, 0.82), clamp(sunward * 1.4 + 0.3, 0.0, 1.0));
   // Sunset tint only in the band right at the terminator, not across the
   // whole night side.
   float dusk = smoothstep(-0.25, -0.05, sunward) * (1.0 - smoothstep(-0.02, 0.18, sunward));
@@ -381,7 +381,7 @@ void main() {
     // comes out sunset-red; the reference keeps that ring a pale blue-white.
     float nightRing = 1.0 - smoothstep(0.0, 0.45, sunward);
     float lumA = dot(atmoIn, vec3(0.2126, 0.7152, 0.0722));
-    atmoIn = mix(atmoIn, lumA * vec3(0.78, 0.92, 1.18), nightRing);
+    atmoIn = mix(atmoIn, lumA * vec3(0.52, 0.80, 1.50), nightRing);
     // Added outside the coverage feather for hits and misses alike, so the
     // glow runs continuously across the silhouette.
     additive += atmoIn;
@@ -801,6 +801,12 @@ void main() {
     // arc the reference's halo loses its blue and goes a neutral pale grey
     // long before it fades out -- the long grazing path through the air.
     float blue = smoothstep(-0.10, 0.05, sunward);
+    // v20: the grey belongs only to the twilight arc. Deeper into the night
+    // the reference's ring is blue again -- lit from behind, through the
+    // whole shell, with no long grazing path left to redden it -- and even
+    // in the arc it only goes halfway to grey. Without this every night view
+    // got the grey-white ring of the terminator all the way round.
+    blue = 1.0 - (1.0 - blue) * smoothstep(-0.42, -0.18, sunward) * 0.5;
     float lit = max(day, fwd * 0.8);
     // A trace survives all the way round: on a fully night-side view the
     // limb itself is at dawn and dusk, and the reference keeps it glowing.
