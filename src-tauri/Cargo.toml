@@ -1,6 +1,6 @@
 [package]
 name = "earth-desk"
-version = "1.1.3"
+version = "1.2.8"
 edition = "2021"
 
 [build-dependencies]
@@ -27,6 +27,8 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 # the clipboard, WIC), so they use Microsoft's own bindings -- the same
 # version Tauri's WebView2 layer already builds, so nothing is compiled twice.
 [target.'cfg(windows)'.dependencies]
+# 截图：把冻结的屏幕通过 WebView2 共享内存直接交给页面（不经 IPC 拷贝 30 MB）。
+webview2-com = "0.38"
 windows-numerics = "0.2"
 
 [target.'cfg(windows)'.dependencies.windows]

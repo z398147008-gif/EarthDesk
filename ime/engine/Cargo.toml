@@ -15,8 +15,11 @@ serde_json = { workspace = true }
 prost = "0.14"
 libloading = "0.8"
 
+[build-dependencies]
+embed-resource = "3"
+
 [target.'cfg(windows)'.dependencies]
-windows-numerics = "0.2"
+ime-candui = { path = "../candui" }
 
 [target.'cfg(windows)'.dependencies.windows]
 workspace = true
@@ -25,6 +28,7 @@ features = [
   "Win32_Security",
   "Win32_Security_Authorization",
   "Win32_Storage_FileSystem",
+  "Win32_Globalization",
   "Win32_System_IO",
   "Win32_System_Pipes",
   "Win32_System_Threading",

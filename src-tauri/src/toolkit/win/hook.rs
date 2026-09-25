@@ -99,8 +99,8 @@ fn post_self(msg: u32) {
     }
 }
 
-fn describe(cfg: &ToolkitConfig, gesture: &str, exe: &str) -> (String, bool) {
-    match cfg.gesture_rule(gesture, exe) {
+fn describe(cfg: &ToolkitConfig, gesture: &str, points: &[(f64, f64)], exe: &str) -> (String, bool) {
+    match cfg.gesture_rule_for(gesture, points, exe) {
         Some(r) => (format!("{gesture}  {}", r.name), true),
         None => (gesture.to_string(), false),
     }
@@ -194,7 +194,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
                                 if rec.too_long() {
                                     trail::hint(Some(("取消".into(), false)));
                                 } else {
-                                    trail::hint(Some(describe(&c.cfg, &now, exe)));
+                                    trail::hint(Some(describe(&c.cfg, &now, rec.points(), exe)));
                                 }
                             }
                         }
@@ -213,7 +213,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
                     if !rec.too_long() {
                         let gesture = rec.gesture();
                         if let Some(c) = compiled() {
-                            if let Some(rule) = c.cfg.gesture_rule(&gesture, &exe) {
+                            if let Some(rule) = c.cfg.gesture_rule_for(&gesture, rec.points(), &exe) {
                                 actions::submit(rule.action.clone(), target.0 as isize, &rule.name);
                             }
                         }

@@ -1046,7 +1046,7 @@ function renderIme() {
     row("每页候选个数", "", slider(st.page_size, 3, 9, 1, (v) => `${v} 个`, (v) => { st.page_size = v; imeSave(); })),
     row("Shift 切换中 / 英", "单按 Shift：把已经打的字母原样上屏并切到英文，再按一次回到中文", switchEl(st.shift_toggle, (on) => { st.shift_toggle = on; imeSave(); })),
     row("Emoji 候选", "打「xiao」时在候选里给出 😄 之类", switchEl(st.emoji, (on) => { st.emoji = on; imeSave(); })),
-    row("中日混合输入", "不用切换：同一串字母同时按双拼和罗马字解析，按词库和上下文把中文、日语候选排在一起（日语候选标「日」）。关掉后默认只打中文，仍可用 /ja 或 Ctrl+Shift+J 切到日语", switchEl(st.mixed !== false, (on) => { st.mixed = on; imeSave(); }))
+    row("中日英混合输入", "不用切换：同一串字母同时按双拼、罗马字和英文单词解析，按词库和上下文把候选排在一起（日语标「日」、英文标「英」，句首英文自动大写）。关掉后默认只打中文，仍可用 /ja 或 Ctrl+Shift+J 切到日语", switchEl(st.mixed !== false, (on) => { st.mixed = on; imeSave(); }))
   );
   parts.push(group("打字", typing));
   const apps = document.createElement("div");
@@ -1067,10 +1067,11 @@ function renderIme() {
   help.open = true;
   help.innerHTML = `<summary>怎么用</summary><ol>
     <li><b>微软双拼</b>；候选按你的使用频率和最近使用自动排序，打过的词组会记住</li>
-    <li><b>选词</b>：空格 第一个 · 数字键 · 鼠标点 · <b>- =</b> 或滚轮翻页 · <b>[ ]</b> 以词定字（取词的第一个 / 最后一个字）</li>
+    <li><b>选词</b>：<b>← →</b> 移动高亮 · <b>↑ ↓</b> 翻页 · 空格上屏高亮的词 · 数字键直接选 · 鼠标点 · <b>- =</b> 或滚轮也能翻页 · <b>[ ]</b> 以词定字（取词的第一个 / 最后一个字）</li>
     <li><b>上屏英文</b>：Enter 上屏打的字母；Shift 上屏并切到英文</li>
-    <li><b>中日混合</b>：直接按罗马字打日语（watashi → 私），日语领先时空格进入日语转换（再按空格换候选，Enter 上屏），数字键直接选；日语刚上屏后按 <b>\`</b> 在 原样 / ひらがな / カタカナ 之间切换；日语后面的 , . 自动变成 、。</li>
+    <li><b>中日混合</b>：直接按罗马字打日语（watashi → 私），中文、日语、英文候选排在一起；高亮落在日语词上时按 <b>↑ ↓</b> 竖着展开它的其他写法（汉字 / ひらがな / カタカナ …），展开后 <b>↑ ↓</b> 选、<b>← →</b> 翻页、空格上屏、Esc 收回；日语刚上屏后按 <b>\`</b> 在 原样 / ひらがな / カタカナ 之间切换；标点跟着正在打的这句话走：日语句子里 , . 是 、。，中文句子里（夹着英文单词也一样）是 ，。，纯英文句子是 , .</li>
     <li><b>切换</b>：Ctrl+Shift+J 轮换 中日混合 → 日本語 → 中文；或打 <b>/mix</b> <b>/ja</b> <b>/zh</b>（也可以 /hh /ry /zw）空格。每个程序记住自己的选择；F6–F10 日语假名 / 半角 / 英数转换</li>
+    <li><b>大写</b>：Caps Lock 打开后字母直接以大写输入；日式键盘上 Shift+逗号键 出 、</li>
     <li><b>更多</b>：F4 或 Ctrl+\` 打开菜单（简繁、全角、Emoji）；按住 Shift 打大写字母开头：V 特殊符号、U 按 Unicode 编码、R 数字转大写金额、N 公历转农历；cC 开头是计算器；打 date / time / week 出当前日期、时间、星期</li></ol>`;
   parts.push(group("", card(help)));
   host.replaceChildren(...parts);

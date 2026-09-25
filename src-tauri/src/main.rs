@@ -1071,7 +1071,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
     let edit = MenuItem::with_id(app, "edit", "编辑模式", true, None::<&str>)?;
     let suspend = tauri::menu::CheckMenuItem::with_id(app, "suspend", "暂停手势和快捷键", true, false, None::<&str>)?;
-    let reload = MenuItem::with_id(app, "reload", "重新载入组件", true, None::<&str>)?;
+    let reload = MenuItem::with_id(app, "reload", "刷新所有组件", true, None::<&str>)?;
     let pins_hide = MenuItem::with_id(app, "pins_hide", "隐藏 / 显示所有贴图", true, None::<&str>)?;
     let pins_solid = MenuItem::with_id(app, "pins_solid", "取消所有贴图的鼠标穿透", true, None::<&str>)?;
     let pins_close = MenuItem::with_id(app, "pins_close", "关闭所有贴图", true, None::<&str>)?;
@@ -1102,11 +1102,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "edit" => toggle_edit_mode(app),
             "reload" => {
-                for label in WIDGETS.iter().chain(std::iter::once(&wallpaper::LABEL)) {
-                    if let Some(win) = app.get_webview_window(label) {
-                        let _ = win.eval("window.location.reload()");
-                    }
+                // Everything that can be reloaded without quitting: the
+                // widgets, the wallpaper, open tool windows, and the input
+                // method's engine.
+                for win in app.webview_windows().values() {
+                    let _ = win.eval("window.location.reload()");
                 }
+                ime::restart_engine();
             }
             "config" => open_config_dir(),
             "quit" => app.exit(0),

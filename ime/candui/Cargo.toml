@@ -1,0 +1,25 @@
+[package]
+name = "ime-candui"
+version = "0.1.0"
+edition = "2021"
+description = "地球桌面输入法的候选窗绘制（引擎进程和 TSF DLL 共用）"
+
+[dependencies]
+ime-proto = { path = "../proto" }
+
+[target.'cfg(windows)'.dependencies]
+windows-numerics = "0.2"
+
+[target.'cfg(windows)'.dependencies.windows]
+workspace = true
+features = [
+  "Win32_Foundation",
+  "Win32_System_Registry",
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_Direct2D",
+  "Win32_Graphics_Direct2D_Common",
+  "Win32_Graphics_DirectWrite",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_UI_HiDpi",
+  "Win32_UI_WindowsAndMessaging",
+]

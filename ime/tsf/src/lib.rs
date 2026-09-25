@@ -5,7 +5,9 @@
 //! engine process (EarthDeskIME.exe) over a named pipe what to do, and
 //! applies the answer (underlined preedit, committed text) through TSF edit
 //! sessions. Pinyin, dictionaries and the candidate window all live in the
-//! engine, so a problem there cannot take the host program down.
+//! engine, so a problem there cannot take the host program down. The one
+//! exception: in immersive hosts (the Start menu's search) the DLL draws
+//! the candidate window itself, see candwin.rs.
 //!
 //! Every COM entry point catches panics (see `guard`): unwinding into a
 //! foreign program is undefined behaviour, and killing it is worse.
@@ -13,6 +15,7 @@
 #![cfg(windows)]
 #![allow(non_snake_case)]
 
+mod candwin;
 mod client;
 mod edit;
 mod keys;

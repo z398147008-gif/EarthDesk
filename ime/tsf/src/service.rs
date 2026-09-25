@@ -9,6 +9,7 @@
 //! - Key-ups go to the engine too (Shift alone toggles 中/英 on release)
 //!   but are never eaten.
 
+use crate::candwin;
 use crate::client::Client;
 use crate::edit::{self, Shared};
 use crate::{guard, keys, DISPLAY_ATTR};
@@ -59,7 +60,7 @@ impl TextService {
             attr: Cell::new(None),
             test_pending: Cell::new(false),
             notify: Cell::new(HWND::default()),
-            client: Rc::new(RefCell::new(Client::new(0))),
+            client: Rc::new(RefCell::new(Client::new(0, false))),
             composition: Rc::new(RefCell::new(None)),
             context: RefCell::new(None),
             me: RefCell::new(None),
@@ -125,6 +126,19 @@ unsafe fn create_notify_window() -> HWND {
     hwnd
 }
 
+/// From our candidate window (candwin.rs): a candidate, a page arrow or the
+/// wheel, for this thread's text service.
+pub fn pick_from_window(index: Option<u32>, page: Option<bool>) {
+    CURRENT.with(|c| {
+        let tip = c.try_borrow().ok().and_then(|c| c.clone());
+        if let Some(tip) = tip {
+            if let Ok(s) = tip.cast_object_ref::<TextService>() {
+                s.on_pick(index, page);
+            }
+        }
+    })
+}
+
 // --- applying engine answers ---------------------------------------------------------
 
 impl TextService {
@@ -136,13 +150,32 @@ impl TextService {
         let Some(sink) = self.sink() else { return };
         let client = self.client.clone();
         let on_caret: edit::OnCaret = Rc::new(move |rc: RECT| {
+            candwin::caret(rc);
             if let Ok(mut c) = client.try_borrow_mut() {
                 c.tell(|session| Request::Caret { session, x: rc.left, y: rc.top, h: (rc.bottom - rc.top).max(1) });
             }
         });
-        edit::apply(self.tid.get(), context, &sink, &self.composition, state, self.attr.get(), sync, on_caret);
+        if let Some(note) = edit::apply(self.tid.get(), context, &sink, &self.composition, state, self.attr.get(), sync, on_caret) {
+            if let Ok(mut c) = self.client.try_borrow_mut() {
+                c.tell(|session| Request::Note { session, message: note.clone() });
+            }
+        }
         if state.preedit.is_some() {
             *self.context.borrow_mut() = Some(context.clone());
+        }
+    }
+
+    /// Our own candidate window (if any) follows the engine's answer.
+    fn show_cands(&self, state: &State) {
+        let Some(ui) = &state.cands else { return };
+        candwin::update(ui);
+        let notes = candwin::take_notes();
+        if !notes.is_empty() {
+            if let Ok(mut c) = self.client.try_borrow_mut() {
+                for n in notes {
+                    c.tell(|session| Request::Note { session, message: n.clone() });
+                }
+            }
         }
     }
 
@@ -159,16 +192,48 @@ impl TextService {
         if st.commit.is_some() || st.preedit.is_some() {
             self.apply(&ctx, &st, false);
         }
+        self.show_cands(&st);
+    }
+
+    /// A click (or the wheel) in our own candidate window.
+    fn on_pick(&self, index: Option<u32>, page: Option<bool>) {
+        let Some(ctx) = self.context.borrow().clone() else { return };
+        let st = {
+            let Ok(mut c) = self.client.try_borrow_mut() else { return };
+            match c.pick(index, page) {
+                Some(s) => s,
+                None => return,
+            }
+        };
+        let composing = self.composition.try_borrow().map(|c| c.is_some()).unwrap_or(false);
+        if st.commit.is_some() || st.preedit.is_some() || composing {
+            self.apply(&ctx, &st, false);
+        }
+        self.show_cands(&st);
     }
 
     /// Send a key; apply the answer. Returns whether it was eaten.
     fn process(&self, context: Option<&ITfContext>, wp: WPARAM, lp: LPARAM, up: bool) -> bool {
-        let Some(key) = keys::convert(wp.0 as u16, lp.0, up) else { return false };
+        // Keys 地球桌面 sends itself (a gesture's Ctrl+W) are commands for
+        // the program, never typing.
+        let composing_now = self.composition.try_borrow().map(|c| c.is_some()).unwrap_or(false);
+        if !composing_now && unsafe { windows::Win32::UI::WindowsAndMessaging::GetMessageExtraInfo() }.0 as usize == ime_proto::INJECTED {
+            return false;
+        }
         let state = {
             let Ok(mut c) = self.client.try_borrow_mut() else { return false };
-            match c.key(key.code, key.mask) {
-                Some(s) => s,
-                None => return false,
+            let (vk, scan, flags, hkl) = keys::raw(wp.0 as u16, lp.0, up);
+            match c.raw_key(vk, scan, flags, hkl) {
+                Ok(Some(s)) => s,
+                Ok(None) => return false,
+                // An engine from before RawKey: convert here.
+                Err(()) => {
+                    let Some(key) = keys::convert(wp.0 as u16, lp.0, up) else { return false };
+                    match c.key(key.code, key.mask) {
+                        Some(s) => s,
+                        None => return false,
+                    }
+                }
             }
         };
         let composing = self.composition.try_borrow().map(|c| c.is_some()).unwrap_or(false);
@@ -177,10 +242,13 @@ impl TextService {
                 self.apply(ctx, &state, true);
             }
         }
+        // After the edit, so the window opens where the text now is.
+        self.show_cands(&state);
         state.eaten && !up
     }
 
     fn reset(&self) {
+        candwin::hide();
         if let Ok(mut c) = self.client.try_borrow_mut() {
             c.tell(|session| Request::Reset { session });
         }
@@ -221,6 +289,7 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
             }
             CURRENT.with(|c| *c.borrow_mut() = None);
             *self.context.borrow_mut() = None;
+            candwin::destroy();
             Ok(())
         })
     }
@@ -244,7 +313,11 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
             }
             let hwnd = create_notify_window();
             self.notify.set(hwnd);
-            *self.client.borrow_mut() = Client::new(hwnd.0 as u64);
+            // Immersive hosts: our own candidate window (the engine's
+            // cannot get above them). If it cannot be made, the engine's
+            // is still better than none.
+            let draws = candwin::wanted() && candwin::init();
+            *self.client.borrow_mut() = Client::new(hwnd.0 as u64, draws);
             *self.thread_mgr.borrow_mut() = Some(tm);
             CURRENT.with(|c| *c.borrow_mut() = me.cast::<ITfTextInputProcessor>().ok());
             Ok(())

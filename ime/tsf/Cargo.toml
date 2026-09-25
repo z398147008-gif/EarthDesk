@@ -12,6 +12,9 @@ path = "src/lib.rs"
 [dependencies]
 ime-proto = { path = "../proto" }
 
+[target.'cfg(windows)'.dependencies]
+ime-candui = { path = "../candui" }
+
 [target.'cfg(windows)'.dependencies.windows]
 workspace = true
 features = [

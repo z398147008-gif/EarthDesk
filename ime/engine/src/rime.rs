@@ -44,6 +44,42 @@ pub struct Snapshot {
     pub composing: bool,
 }
 
+/// A path as librime can open it. librime (and glog, lua) hand char* paths
+/// to the C runtime, which reads them in the process's ANSI code page. Our
+/// manifest makes that UTF-8; on Windows versions that ignore it, fall back
+/// to the short 8.3 name (ASCII) or the ANSI spelling.
+fn native_path(p: &Path) -> CString {
+    let utf8 = p.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    {
+        use windows::core::HSTRING;
+        use windows::Win32::Globalization::{GetACP, WideCharToMultiByte, CP_ACP};
+        use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+        if !utf8.is_ascii() && unsafe { GetACP() } != 65001 {
+            let wide = HSTRING::from(utf8.as_str());
+            let mut buf = vec![0u16; 1024];
+            let n = unsafe { GetShortPathNameW(&wide, Some(&mut buf)) } as usize;
+            if n > 0 && n < buf.len() {
+                let short = String::from_utf16_lossy(&buf[..n]);
+                if short.is_ascii() {
+                    crate::log(&format!("using short path {short} for {utf8}"));
+                    return CString::new(short).unwrap_or_default();
+                }
+            }
+            let w: Vec<u16> = utf8.encode_utf16().collect();
+            let mut out = vec![0u8; w.len() * 4 + 4];
+            let mut lossy = windows::core::BOOL(0);
+            let n = unsafe { WideCharToMultiByte(CP_ACP, 0, &w, Some(&mut out), None, Some(&mut lossy)) } as usize;
+            if n > 0 && !lossy.as_bool() {
+                out.truncate(n);
+                return CString::new(out).unwrap_or_default();
+            }
+            crate::log(&format!("path {utf8} cannot be spelt in code page {}", unsafe { GetACP() }));
+        }
+    }
+    CString::new(utf8).unwrap_or_default()
+}
+
 fn cstr(p: *const c_char) -> String {
     if p.is_null() {
         String::new()
@@ -99,9 +135,9 @@ impl Rime {
     /// Set up and initialise. `shared`: the read-only data shipped with us;
     /// `user`: the user's dictionaries, customisations and build output.
     pub fn start(&self, shared: &Path, user: &Path, log_dir: &Path) {
-        let shared = CString::new(shared.to_string_lossy().as_bytes()).unwrap();
-        let user = CString::new(user.to_string_lossy().as_bytes()).unwrap();
-        let log = CString::new(log_dir.to_string_lossy().as_bytes()).unwrap();
+        let shared = native_path(shared);
+        let user = native_path(user);
+        let log = native_path(log_dir);
         let name = CString::new("EarthDesk").unwrap();
         let code = CString::new("earthdesk").unwrap();
         let ver = CString::new(env!("CARGO_PKG_VERSION")).unwrap();
@@ -168,6 +204,11 @@ impl Rime {
 
     pub fn process_key(&self, s: RimeSessionId, keycode: u32, mask: u32) -> bool {
         call!(self.process_key(s, keycode as c_int, mask as c_int)) != 0
+    }
+
+    /// The keys typed into the composition, as typed ("nihk").
+    pub fn raw_input(&self, s: RimeSessionId) -> String {
+        cstr(call!(self.get_input(s)))
     }
 
     pub fn clear(&self, s: RimeSessionId) {

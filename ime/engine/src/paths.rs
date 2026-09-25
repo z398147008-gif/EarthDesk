@@ -88,6 +88,37 @@ pub fn rime_library() -> PathBuf {
 /// on Deploy) so an update of EarthDesk or a change on the settings page
 /// reaches them; files the user writes by hand under other names are left
 /// alone.
+/// Keys only a Japanese (JIS) keyboard has: ろ, ¥, かな, 変換, 無変換.
+pub const JIS_ONLY_SCANS: [u16; 5] = [0x73, 0x7D, 0x70, 0x79, 0x7B];
+
+fn jis_flag() -> PathBuf {
+    data_file("jis-keyboard")
+}
+
+/// Seen a key only a Japanese keyboard has: remember it (Windows does not
+/// always report a JIS keyboard as one). True the first time.
+pub fn note_jis_key() -> bool {
+    static SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if SEEN.swap(true, std::sync::atomic::Ordering::SeqCst) || jis_flag().exists() {
+        return false;
+    }
+    let _ = std::fs::write(jis_flag(), "1");
+    true
+}
+
+/// Is the keyboard a Japanese (JIS) one?
+pub fn jis_keyboard() -> bool {
+    if std::env::var_os("EARTHDESK_IME_JIS").is_some() || jis_flag().exists() {
+        return true;
+    }
+    #[cfg(windows)]
+    unsafe {
+        windows::Win32::UI::Input::KeyboardAndMouse::GetKeyboardType(0) == 7
+    }
+    #[cfg(not(windows))]
+    false
+}
+
 pub fn write_customisations(user: &Path, st: &ime_proto::Settings) {
     let page = st.page_size.clamp(3, 9);
     let shift = if st.shift_toggle { "commit_code" } else { "noop" };
@@ -109,6 +140,8 @@ patch:
 "#
     );
     let emoji = if st.emoji { 1 } else { 0 };
+    // A Japanese keyboard has 、 printed on the comma key (with Shift).
+    let jis = if jis_keyboard() { "  # 日式键盘：Shift+逗号键 出 、（键帽上印的）\n  punctuator/half_shape/<: \"、\"\n" } else { "" };
     let schema = format!(
         r#"# 由地球桌面生成，每次启动会覆盖；请在 地球桌面 设置 → 输入法 里修改。
 patch:
@@ -122,7 +155,7 @@ patch:
   translator/enable_correction: false
   switches/@3/reset: {emoji}
   menu/page_size: {page}
-"#
+{jis}"#
     );
     // The schema's quick phrases (text<Tab>code<Tab>weight, always first).
     // The user's file: created once, never overwritten.
@@ -135,8 +168,34 @@ patch:
              # 例：\n# 我的邮箱是 someone@example.com\tyx\t1\n#\n",
         );
     }
+    personal_dict_hook(user);
     write_if_changed(&user.join("default.custom.yaml"), &default);
     write_if_changed(&user.join("double_pinyin_mspy.custom.yaml"), &schema);
+}
+
+const PERSONAL_MARK: &str = "# 由地球桌面生成：在雾凇拼音的词库前面加上你自己的词（earthdesk_personal）。";
+
+/// Your own words (earthdesk_personal.dict.yaml, made from your writing by
+/// tools/ime-bench/mkpersonal.py) go first among rime-ice's dictionaries, so
+/// their weights count: a copy of rime_ice.dict.yaml in the user folder that
+/// imports it. Without the file, our copy is removed again.
+fn personal_dict_hook(user: &Path) {
+    let target = user.join("rime_ice.dict.yaml");
+    let ours = std::fs::read_to_string(&target).map(|t| t.starts_with(PERSONAL_MARK)).unwrap_or(false);
+    if !user.join("earthdesk_personal.dict.yaml").exists() {
+        if ours {
+            let _ = std::fs::remove_file(&target);
+        }
+        return;
+    }
+    if target.exists() && !ours {
+        return; // the user's own copy: leave it alone
+    }
+    let Ok(shared) = std::fs::read_to_string(shared_dir().join("rime_ice.dict.yaml")) else { return };
+    let Some(i) = shared.find("import_tables:") else { return };
+    let j = shared[i..].find('\n').map(|k| i + k + 1).unwrap_or(shared.len());
+    let text = format!("{PERSONAL_MARK}\n{}  - earthdesk_personal\n{}", &shared[..j], &shared[j..]);
+    write_if_changed(&target, &text);
 }
 
 /// Rime redeploys when a file's time changes; do not touch it for nothing.

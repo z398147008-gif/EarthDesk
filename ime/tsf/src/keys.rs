@@ -58,8 +58,75 @@ fn special(vk: u16, extended: bool, scan: u32) -> Option<u32> {
         VK_DELETE => DELETE,
         v if (VK_F1.0..=VK_F12.0).contains(&v.0) => F1 + (v.0 - VK_F1.0) as u32,
         v if (VK_NUMPAD0.0..=VK_NUMPAD9.0).contains(&v.0) => KP_0 + (v.0 - VK_NUMPAD0.0) as u32,
+        // The keypad keeps its own identity: Rime passes KP_Decimal through
+        // as ".", where a plain "." would become "。".
+        VK_DECIMAL => KP_DECIMAL,
+        VK_ADD => KP_ADD,
+        VK_SUBTRACT => KP_SUBTRACT,
+        VK_MULTIPLY => KP_MULTIPLY,
+        VK_DIVIDE => KP_DIVIDE,
+        VK_SEPARATOR => KP_SEPARATOR,
         _ => return None,
     })
+}
+
+/// The layout to read characters with: the thread's, except that on a
+/// Japanese (JIS) keyboard running a non-Japanese layout we read the keys as
+/// JIS, which is what is printed on them.
+fn layout() -> HKL {
+    use std::sync::OnceLock;
+    static JIS: OnceLock<isize> = OnceLock::new();
+    let cur = unsafe { GetKeyboardLayout(0) };
+    if (cur.0 as usize & 0xffff) == 0x0411 {
+        return cur;
+    }
+    let jis = *JIS.get_or_init(|| unsafe {
+        if GetKeyboardType(0) == 7 {
+            LoadKeyboardLayoutW(windows::core::w!("00000411"), KLF_NOTELLSHELL).map(|h| h.0 as isize).unwrap_or(0)
+        } else {
+            0
+        }
+    });
+    if jis != 0 {
+        HKL(jis as *mut _)
+    } else {
+        cur
+    }
+}
+
+/// The key for the engine as Windows reported it (see ime_proto::rawkey):
+/// virtual key, scan code, flags, and the thread's keyboard layout. All the
+/// interpretation happens in the engine.
+pub fn raw(vk: u16, lparam: isize, up: bool) -> (u16, u16, u32, u64) {
+    use ime_proto::rawkey as rk;
+    let mut state = [0u8; 256];
+    unsafe {
+        let _ = GetKeyboardState(&mut state);
+    }
+    let down = |k: VIRTUAL_KEY| state[k.0 as usize] & 0x80 != 0;
+    let physical = |k: VIRTUAL_KEY| unsafe { GetAsyncKeyState(k.0 as i32) } as u16 & 0x8000 != 0;
+    let mut f = 0;
+    if up {
+        f |= rk::UP;
+    }
+    if (lparam >> 24) & 1 == 1 {
+        f |= rk::EXTENDED;
+    }
+    if down(VK_SHIFT) {
+        f |= rk::SHIFT;
+    }
+    if down(VK_CONTROL) || physical(VK_CONTROL) {
+        f |= rk::CONTROL;
+    }
+    if down(VK_MENU) || physical(VK_MENU) {
+        f |= rk::ALT;
+    }
+    if state[VK_CAPITAL.0 as usize] & 1 != 0 {
+        f |= rk::CAPS;
+    }
+    let scan = ((lparam >> 16) & 0xff) as u16;
+    let hkl = unsafe { GetKeyboardLayout(0) }.0 as usize as u64;
+    (vk, scan, f, hkl)
 }
 
 /// `lparam` as in WM_KEYDOWN: bits 16-23 scan code, bit 24 extended, bit 31
@@ -79,10 +146,14 @@ pub fn convert(vk: u16, lparam: isize, up: bool) -> Option<Key> {
     if state[VK_CAPITAL.0 as usize] & 1 != 0 {
         m |= mask::LOCK;
     }
-    if down(VK_CONTROL) {
+    // Ctrl / Alt: the thread's key state, or the keyboard itself. Some
+    // programs hand us the V of Ctrl+V before their key state shows Ctrl
+    // (Chromium-based apps), and a missed Ctrl turns a shortcut into typing.
+    let physical = |k: VIRTUAL_KEY| unsafe { GetAsyncKeyState(k.0 as i32) } as u16 & 0x8000 != 0;
+    if down(VK_CONTROL) || physical(VK_CONTROL) {
         m |= mask::CONTROL;
     }
-    if down(VK_MENU) {
+    if down(VK_MENU) || physical(VK_MENU) {
         m |= mask::ALT;
     }
     if up {
@@ -108,7 +179,18 @@ pub fn convert(vk: u16, lparam: isize, up: bool) -> Option<Key> {
     let mut buf = [0u16; 8];
     // Flag 4: do not change the keyboard state (dead keys stay pending in
     // the app, not in us). Windows 10 1607+.
-    let n = unsafe { ToUnicodeEx(vk as u32, scan, &table, &mut buf, 4, Some(GetKeyboardLayout(0))) };
+    // Reading with another layout than the thread's: the virtual key must
+    // come from that layout too (VK_OEM_* keys differ between US and JIS).
+    let hkl = layout();
+    let vk = if hkl != unsafe { GetKeyboardLayout(0) } {
+        match unsafe { MapVirtualKeyExW(scan, MAPVK_VSC_TO_VK_EX, Some(hkl)) } {
+            0 => vk as u32,
+            v => v,
+        }
+    } else {
+        vk as u32
+    };
+    let n = unsafe { ToUnicodeEx(vk, scan, &table, &mut buf, 4, Some(hkl)) };
     if n == 1 {
         return Some(Key { code: buf[0] as u32, mask: m });
     }

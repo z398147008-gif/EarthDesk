@@ -138,6 +138,19 @@ pub fn ime_deploy() -> bool {
     matches!(ask(Request::Deploy), Some(Reply::Ok))
 }
 
+/// Tray 「刷新所有组件」: the engine saves, quits and is started again (a
+/// few seconds; programs reconnect by themselves). Programs that are
+/// already open keep their input-method module until they are reopened.
+pub fn restart_engine() {
+    std::thread::spawn(|| {
+        let was_running = matches!(ask(Request::Restart), Some(Reply::Ok));
+        if was_running {
+            std::thread::sleep(Duration::from_millis(1200));
+        }
+        let _ = ime_start();
+    });
+}
+
 #[tauri::command]
 pub fn ime_start() -> Result<(), String> {
     let exe = engine_exe().ok_or("输入法没有安装")?;

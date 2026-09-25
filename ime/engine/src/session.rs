@@ -11,7 +11,7 @@ use crate::compose::{Comp, LastJa, Mode, ModeMemory};
 use crate::mixed::{Lang, LangPref};
 use crate::mozc::Mozc;
 use crate::rime::{Rime, Snapshot};
-use ime_proto::{Preedit, Reply, Request, State};
+use ime_proto::{CandUi, Cands, Preedit, Reply, Request, State};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -35,6 +35,24 @@ pub struct View {
     pub last_page: bool,
     /// A short notice (mode switched): no page arrows, hides by itself.
     pub flash: bool,
+    /// A column instead of a row (a Japanese word's other spellings).
+    pub vertical: bool,
+}
+
+impl View {
+    /// As sent to a DLL that draws the candidates itself.
+    pub fn cands(&self) -> Cands {
+        Cands {
+            preedit: self.preedit.clone(),
+            candidates: self.candidates.clone(),
+            labels: self.labels.clone(),
+            highlighted: self.highlighted,
+            page_no: self.page_no,
+            last_page: self.last_page,
+            flash: self.flash,
+            vertical: self.vertical,
+        }
+    }
 }
 
 pub trait Ui: Send + Sync {
@@ -57,6 +75,9 @@ pub struct Sess {
     /// Host program (lower-case exe name).
     pub exe: String,
     pub notify: u64,
+    /// The DLL draws the candidate window itself (immersive hosts such as
+    /// the Start menu's search): candidates go back in `State::cands`.
+    pub draws: bool,
     pub caret: Option<Caret>,
     /// A change the DLL has not fetched yet (a candidate picked with the
     /// mouse).
@@ -64,6 +85,8 @@ pub struct Sess {
     pub mode: Mode,
     /// Mozc session id, 0 = none yet.
     pub mozc: u64,
+    /// A spare Mozc session for looking up a word's other spellings.
+    pub mozc_aux: u64,
     /// A composition shared between Chinese and Japanese (or handed to
     /// Mozc), see compose.rs. None while Rime alone composes.
     pub comp: Option<Comp>,
@@ -73,6 +96,9 @@ pub struct Sess {
     pub last_ja: Option<LastJa>,
     /// Our own recent output here (Mozc uses it as conversion context).
     pub recent: String,
+    /// What the sentence being typed is made of so far (Chinese characters,
+    /// Japanese characters, English words), for its punctuation.
+    pub sentence: [u32; 3],
     /// Typing a "/" command.
     pub cmd: Option<String>,
 }
@@ -92,6 +118,7 @@ pub struct Engine {
     pub(crate) settings: Mutex<ime_proto::Settings>,
     pub(crate) pref: Mutex<LangPref>,
     pub(crate) modes: Mutex<ModeMemory>,
+    pub(crate) en: crate::mixed::EnDict,
 }
 
 /// Byte offset in UTF-8 -> offset in UTF-16 units.
@@ -106,6 +133,9 @@ pub fn utf16_index(s: &str, byte: usize) -> u32 {
 
 impl Engine {
     pub fn new(rime: Rime, mozc: Option<Mozc>, ui: Box<dyn Ui>, schema: &str) -> Engine {
+        let mut en = crate::mixed::EnDict::load(&crate::paths::shared_dir().join("en_dicts"));
+        en.load_personal(&crate::paths::user_dir().join("en_personal.txt"));
+        crate::log(&format!("english words: {}", en.len()));
         Engine {
             rime,
             mozc,
@@ -115,6 +145,7 @@ impl Engine {
             settings: Mutex::new(crate::paths::load_settings()),
             pref: Mutex::new(LangPref::load(&crate::paths::data_file("langpref.json"))),
             modes: Mutex::new(ModeMemory::load(&crate::paths::data_file("modes.json"))),
+            en,
         }
     }
 
@@ -127,7 +158,7 @@ impl Engine {
         !self.rime.is_maintaining()
     }
 
-    pub(crate) fn page_size(&self) -> usize {
+    pub fn page_size(&self) -> usize {
         self.settings.lock().map(|s| s.page_size.clamp(3, 9) as usize).unwrap_or(7)
     }
 
@@ -162,6 +193,14 @@ impl Engine {
         Some(s.mozc)
     }
 
+    pub(crate) fn mozc_aux(&self, s: &mut Sess) -> Option<u64> {
+        let m = self.mozc.as_ref()?;
+        if s.mozc_aux == 0 {
+            s.mozc_aux = m.create_session()?;
+        }
+        Some(s.mozc_aux)
+    }
+
     pub(crate) fn to_state(&self, eaten: bool, snap: &Snapshot) -> State {
         State {
             eaten,
@@ -172,6 +211,7 @@ impl Engine {
                 .map(|(text, cursor)| Preedit { text: text.clone(), cursor: utf16_index(text, *cursor) }),
             ascii: snap.ascii,
             delete_before: 0,
+            cands: None,
         }
     }
 
@@ -186,8 +226,23 @@ impl Engine {
                 page_no: m.page_no,
                 last_page: m.is_last_page,
                 flash: false,
+                vertical: false,
             }),
             _ => UiOut::Hide,
+        }
+    }
+
+    /// For a session whose DLL draws the candidates: turn what the window
+    /// should do into `State::cands`, and keep our own window out of it
+    /// (hidden, in case it still shows another program's candidates).
+    fn route(draws: bool, ui: UiOut) -> (Option<CandUi>, UiOut) {
+        if !draws {
+            return (None, ui);
+        }
+        match ui {
+            UiOut::Keep => (None, UiOut::Keep),
+            UiOut::Hide => (Some(CandUi::Hide), UiOut::Keep),
+            UiOut::Show(v) => (Some(CandUi::Show { view: v.cands() }), UiOut::Hide),
         }
     }
 
@@ -218,7 +273,7 @@ impl Engine {
             Err(p) => p.into_inner(),
         };
         match req {
-            Request::Hello { version, exe, notify, .. } => {
+            Request::Hello { version, exe, notify, draws, .. } => {
                 if version != ime_proto::VERSION {
                     return Reply::Error { message: format!("protocol {version}, engine speaks {}", ime_proto::VERSION) };
                 }
@@ -232,37 +287,77 @@ impl Engine {
                         rime: 0,
                         exe,
                         notify,
+                        draws,
                         caret: None,
                         pending: None,
                         mode,
                         mozc: 0,
+                        mozc_aux: 0,
                         comp: None,
                         last: None,
                         last_ja: None,
                         recent: String::new(),
+                        sentence: [0; 3],
                         cmd: None,
                     },
                 );
                 Reply::Hello { version: ime_proto::VERSION, session: id }
+            }
+            Request::RawKey { session, vk, scan, flags, hkl } => {
+                if flags & ime_proto::rawkey::UP == 0 && crate::paths::JIS_ONLY_SCANS.contains(&scan) && crate::paths::note_jis_key() {
+                    // A Japanese keyboard after all: its punctuation layout
+                    // (Shift+comma for 、) needs the dictionaries rebuilt.
+                    crate::log("Japanese keyboard detected");
+                    drop(g);
+                    self.handle(Request::Deploy);
+                    return self.handle(Request::RawKey { session, vk, scan, flags, hkl });
+                }
+                #[cfg(windows)]
+                let key = crate::win::keyconv::convert(vk, scan, flags, hkl);
+                #[cfg(not(windows))]
+                let key: Option<(u32, u32)> = {
+                    let _ = (vk, scan, flags, hkl);
+                    None
+                };
+                let Some((keycode, mask)) = key else { return Reply::State(State::default()) };
+                drop(g);
+                self.handle(Request::Key { session, keycode, mask })
             }
             Request::Key { session, keycode, mask } => {
                 if !self.ready() {
                     return Reply::Busy;
                 }
                 let Some(s) = g.sessions.get_mut(&session) else { return Reply::Error { message: "no such session".into() } };
-                let (state, ui) = self.key(s, session, keycode, mask);
+                let (mut state, ui) = self.key(s, session, keycode, mask);
+                let (cands, ui) = Self::route(s.draws, ui);
+                state.cands = cands;
                 let caret = s.caret;
                 g.focused = Some(session);
                 drop(g);
                 self.apply_ui(ui, caret);
                 Reply::State(state)
             }
+            Request::Pick { session, index, page } => {
+                if !self.ready() {
+                    return Reply::Busy;
+                }
+                let Some(s) = g.sessions.get_mut(&session) else { return Reply::Error { message: "no such session".into() } };
+                let (mut state, ui) = self.click(s, session, index.map(|i| i as usize), page);
+                let (cands, ui) = Self::route(s.draws, ui);
+                state.cands = cands;
+                let caret = s.caret;
+                drop(g);
+                self.apply_ui(ui, caret);
+                Reply::State(state)
+            }
             Request::Caret { session, x, y, h } => {
                 let c = Caret { x, y, h };
+                let mut draws = false;
                 if let Some(s) = g.sessions.get_mut(&session) {
                     s.caret = Some(c);
+                    draws = s.draws;
                 }
-                if g.focused == Some(session) {
+                if g.focused == Some(session) && !draws {
                     drop(g);
                     self.ui.move_to(c);
                 }
@@ -288,6 +383,7 @@ impl Engine {
                         self.clear(s);
                     }
                     s.last_ja = None;
+                    s.sentence = [0; 3];
                 }
                 if g.focused == Some(session) {
                     drop(g);
@@ -303,12 +399,33 @@ impl Engine {
                     if let (Some(m), true) = (&self.mozc, s.mozc != 0) {
                         m.delete_session(s.mozc);
                     }
+                    if let (Some(m), true) = (&self.mozc, s.mozc_aux != 0) {
+                        m.delete_session(s.mozc_aux);
+                    }
                 }
                 if g.focused == Some(session) {
                     g.focused = None;
                     drop(g);
                     self.ui.hide();
                 }
+                Reply::Ok
+            }
+            Request::Note { session, message } => {
+                let exe = g.sessions.get(&session).map(|s| s.exe.clone()).unwrap_or_default();
+                drop(g);
+                crate::log(&format!("dll [{exe}]: {message}"));
+                Reply::Ok
+            }
+            Request::Restart => {
+                drop(g);
+                crate::log("restart requested");
+                #[cfg(windows)]
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                    if let Some(e) = crate::win::ENGINE.get() {
+                        e.shutdown();
+                    }
+                });
                 Reply::Ok
             }
             Request::Status => Reply::Status {
@@ -385,10 +502,33 @@ impl Engine {
         self.inner.lock().ok()?.sessions.get(&session).map(|s| s.exe.clone())
     }
 
+    /// For --bench: text the user typed some other way (the word was not
+    /// offered): clear the composition and record it as our output.
+    #[allow(dead_code)]
+    pub fn bench_commit(&self, session: u64, text: &str, lang: crate::mixed::Lang) {
+        let mut g = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if let Some(s) = g.sessions.get_mut(&session) {
+            self.clear(s);
+            self.bench_committed(s, text, lang);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn bench_set_mode(&self, session: u64, mode: crate::compose::Mode) {
+        if let Ok(mut g) = self.inner.lock() {
+            if let Some(s) = g.sessions.get_mut(&session) {
+                s.mode = mode;
+            }
+        }
+    }
+
     /// For the --cli test: a session without a pipe.
     #[allow(dead_code)]
     pub fn test_session(&self, exe: &str) -> u64 {
-        match self.handle(Request::Hello { version: ime_proto::VERSION, pid: 0, exe: exe.into(), notify: 0 }) {
+        match self.handle(Request::Hello { version: ime_proto::VERSION, pid: 0, exe: exe.into(), notify: 0, draws: false }) {
             Reply::Hello { session, .. } => session,
             _ => 0,
         }
@@ -397,7 +537,24 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
-    use super::utf16_index;
+    use super::{utf16_index, Engine, UiOut, View};
+    use ime_proto::CandUi;
+
+    #[test]
+    fn route_to_dll() {
+        let v = View { session: 1, preedit: "ni".into(), candidates: vec![("你".into(), String::new())], labels: vec!["1".into()], ..Default::default() };
+        // Ordinary programs: the engine's window, nothing in the State.
+        let (c, ui) = Engine::route(false, UiOut::Show(v.clone()));
+        assert!(c.is_none() && matches!(ui, UiOut::Show(_)));
+        // Drawn by the DLL: the view goes back, our window hides.
+        let (c, ui) = Engine::route(true, UiOut::Show(v));
+        assert!(matches!(c, Some(CandUi::Show { ref view }) if view.preedit == "ni" && view.candidates.len() == 1));
+        assert!(matches!(ui, UiOut::Hide));
+        let (c, ui) = Engine::route(true, UiOut::Hide);
+        assert!(matches!(c, Some(CandUi::Hide)) && matches!(ui, UiOut::Keep));
+        let (c, ui) = Engine::route(true, UiOut::Keep);
+        assert!(c.is_none() && matches!(ui, UiOut::Keep));
+    }
 
     #[test]
     fn utf16() {

@@ -26,6 +26,8 @@ pub struct Apply {
     state: State,
     attr: Option<i32>,
     on_caret: OnCaret,
+    /// What went wrong inside the session, for the engine's log.
+    err: Rc<RefCell<Option<String>>>,
 }
 
 unsafe fn selection_range(ctx: &ITfContext, ec: u32) -> Result<ITfRange> {
@@ -66,7 +68,15 @@ unsafe fn text_ext(ctx: &ITfContext, ec: u32, range: &ITfRange) -> Option<RECT> 
 
 impl ITfEditSession_Impl for Apply_Impl {
     fn DoEditSession(&self, ec: u32) -> Result<()> {
-        crate::guard(Ok(()), || unsafe { self.run(ec) })
+        crate::guard(Ok(()), || unsafe {
+            let r = self.run(ec);
+            if let Err(e) = &r {
+                if let Ok(mut slot) = self.err.try_borrow_mut() {
+                    *slot = Some(format!("edit failed: {e}"));
+                }
+            }
+            r
+        })
     }
 }
 
@@ -158,8 +168,11 @@ impl Apply {
     }
 }
 
-/// Apply `state` to `context`. Synchronous inside key handling; from a
-/// notification it runs whenever TSF grants the lock.
+/// Apply `state` to `context`. Inside key handling we ask for the edit
+/// synchronously (the text must be there before the program sees the next
+/// key); programs that refuse synchronous edits (Chromium-based apps
+/// sometimes do) get it asynchronously instead. Returns a note for the
+/// engine's log when something failed.
 #[allow(clippy::too_many_arguments)]
 pub fn apply(
     tid: u32,
@@ -170,19 +183,41 @@ pub fn apply(
     attr: Option<i32>,
     sync: bool,
     on_caret: OnCaret,
-) {
-    let es: ITfEditSession = Apply {
-        context: context.clone(),
-        sink: sink.clone(),
-        composition: composition.clone(),
-        state: state.clone(),
-        attr,
-        on_caret,
-    }
-    .into();
-    let flags = if sync { TF_ES_SYNC | TF_ES_READWRITE } else { TF_ES_ASYNCDONTCARE | TF_ES_READWRITE };
+) -> Option<String> {
+    let err: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let make = || -> ITfEditSession {
+        Apply {
+            context: context.clone(),
+            sink: sink.clone(),
+            composition: composition.clone(),
+            state: state.clone(),
+            attr,
+            on_caret: on_caret.clone(),
+            err: err.clone(),
+        }
+        .into()
+    };
+    let async_flags = TF_ES_ASYNCDONTCARE | TF_ES_READWRITE;
     unsafe {
-        let _ = context.RequestEditSession(tid, &es, flags);
+        if sync {
+            let r = context.RequestEditSession(tid, &make(), TF_ES_SYNC | TF_ES_READWRITE);
+            match r {
+                Ok(hr) if hr.is_ok() => return err.borrow_mut().take(),
+                Ok(hr) => {
+                    let r2 = context.RequestEditSession(tid, &make(), async_flags);
+                    return Some(format!("sync edit refused ({hr:?}), async -> {:?}", r2.map(|h| h.0)));
+                }
+                Err(e) => {
+                    let r2 = context.RequestEditSession(tid, &make(), async_flags);
+                    return Some(format!("sync edit request failed ({e}), async -> {:?}", r2.map(|h| h.0)));
+                }
+            }
+        }
+        match context.RequestEditSession(tid, &make(), async_flags) {
+            Ok(hr) if hr.is_ok() || hr == TF_S_ASYNC => None,
+            Ok(hr) => Some(format!("async edit refused ({hr:?})")),
+            Err(e) => Some(format!("async edit request failed ({e})")),
+        }
     }
 }
 

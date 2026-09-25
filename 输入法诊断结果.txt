@@ -1,0 +1,124 @@
+﻿== 时间 2026-09-25 00:27:21  Windows Microsoft Windows NT 10.0.22631.0  ACP=932
+== 安装目录 C:\Program Files\地球桌面\ime
+              1  data
+         826368  EarthDeskIME.exe
+         331776  EarthDeskTSF.dll
+         282112  EarthDeskTSF32.dll
+       22523392  earthdesk_mozc.dll
+             14  earthdesk_mozc.tag
+         132111  ime.ico
+           5734  LICENSE-mozc.txt
+         643512  msvcp140.dll
+        3739136  rime.dll
+         178616  vcruntime140.dll
+          50112  vcruntime140_1.dll
+== 正在运行的引擎
+== 注册表
+   64 位: C:\Program Files\地球桌面\ime\EarthDeskTSF.dll
+   Run:   "C:\Program Files\地球桌面\ime\EarthDeskIME.exe"
+== 最近两天引擎崩溃记录(系统「应用程序」日志)
+--- 09/25/2026 00:19:08  事件 1001
+   Fault bucket 2159955801337043078, type 5
+   Event Name: BEX64
+   Response: 不可用
+   Cab Id: 0
+   
+   Problem signature:
+   P1: EarthDeskIME.exe
+   P2: 0.0.0.0
+   P3: 6ab53c33
+   P4: EarthDeskIME.exe
+   P5: 0.0.0.0
+   P6: 6ab53c33
+   P7: 0000000000088017
+   P8: c0000409
+--- 09/25/2026 00:19:06  事件 1000
+   Faulting application name: EarthDeskIME.exe, version: 0.0.0.0, time stamp: 0x6ab53c33
+   Faulting module name: EarthDeskIME.exe, version: 0.0.0.0, time stamp: 0x6ab53c33
+   Exception code: 0xc0000409
+   Fault offset: 0x0000000000088017
+   Faulting process id: 0x0x5024
+   Faulting application start time: 0x0x1DD4C380A017509
+   Faulting application path: C:\Program Files\地球桌面\ime\EarthDeskIME.exe
+   Faulting module path: C:\Program Files\地球桌面\ime\EarthDeskIME.exe
+   Report Id: 10c6ceda-4f2a-4d83-b5db-629d62886ce1
+   Faulting package full name:
+   Faulting package-relative application ID:
+--- 09/25/2026 00:18:06  事件 1001
+   Fault bucket 2159955801337043078, type 5
+   Event Name: BEX64
+   Response: 不可用
+   Cab Id: 0
+   
+   Problem signature:
+   P1: EarthDeskIME.exe
+   P2: 0.0.0.0
+   P3: 6ab53c33
+   P4: EarthDeskIME.exe
+   P5: 0.0.0.0
+   P6: 6ab53c33
+   P7: 0000000000088017
+   P8: c0000409
+--- 09/25/2026 00:18:04  事件 1000
+   Faulting application name: EarthDeskIME.exe, version: 0.0.0.0, time stamp: 0x6ab53c33
+   Faulting module name: EarthDeskIME.exe, version: 0.0.0.0, time stamp: 0x6ab53c33
+   Exception code: 0xc0000409
+   Fault offset: 0x0000000000088017
+   Faulting process id: 0x0x26CC
+   Faulting application start time: 0x0x1DD4C37E55B22E7
+   Faulting application path: C:\Program Files\地球桌面\ime\EarthDeskIME.exe
+   Faulting module path: C:\Program Files\地球桌面\ime\EarthDeskIME.exe
+   Report Id: 620d1c4e-41c9-4a87-a09b-96f66cfb6f27
+   Faulting package full name:
+   Faulting package-relative application ID:
+--- 09/25/2026 00:15:16  事件 1001
+   Fault bucket 2159955801337043078, type 5
+   Event Name: BEX64
+   Response: 不可用
+   Cab Id: 0
+   
+   Problem signature:
+   P1: EarthDeskIME.exe
+   P2: 0.0.0.0
+   P3: 6ab53c33
+   P4: EarthDeskIME.exe
+   P5: 0.0.0.0
+   P6: 6ab53c33
+   P7: 0000000000088017
+   P8: c0000409
+--- 09/25/2026 00:15:13  事件 1000
+   Faulting application name: EarthDeskIME.exe, version: 0.0.0.0, time stamp: 0x6ab53c33
+   Faulting module name: EarthDeskIME.exe, version: 0.0.0.0, time stamp: 0x6ab53c33
+   Exception code: 0xc0000409
+   Fault offset: 0x0000000000088017
+   Faulting process id: 0x0x7A44
+   Faulting application start time: 0x0x1DD4C377F9BB72C
+   Faulting application path: C:\Program Files\地球桌面\ime\EarthDeskIME.exe
+   Faulting module path: C:\Program Files\地球桌面\ime\EarthDeskIME.exe
+   Report Id: b87092e1-b62f-41ba-b0b9-b9169ff52f09
+   Faulting package full name:
+   Faulting package-relative application ID:
+== 引擎日志 %APPDATA%\EarthDesk\ime
+            1  \rime
+          223  \ime.log
+           98  \settings.json
+          251  \rime\custom_phrase_double.txt
+          435  \rime\default.custom.yaml
+          605  \rime\double_pinyin_mspy.custom.yaml
+   log: 1790262614 regsvr32 /s C:\Program Files\蝨ｰ逅・｡碁擇\ime\EarthDeskTSF.dll -> Some(0)
+   log: 1790262614 regsvr32 /s C:\Program Files\蝨ｰ逅・｡碁擇\ime\EarthDeskTSF32.dll -> Some(0)
+   log: 1790262614 InstallLayoutOrTip remove=false -> true
+== 试运行引擎:installed (C:\Program Files\地球桌面\ime)
+   退出码  (0x)
+   err: fatal runtime error: Rust cannot catch foreign exceptions, aborting
+== 试运行引擎:ascii (C:\Users\Public\edime-test)
+   退出码  (0x)
+   out:         n eaten=1 commit="" preedit="・・ cands=*n(譌･) 驍｣ 蟷ｴ 螂ｳ 笙 髫ｾ 蜀・        i eaten=1 commit="" preedit="縺ｫ" cands=*莠・譌･) 菴 2(譌･) 蟆ｼ 豕･ 騾・諡・        h eaten=1 commit="" preedit="縺ｫ・・ cands=*莠・譌･) 菴莨・2(譌･) 菴蝗・菴霑・菴螂ｽ 窓
+   out:         k eaten=1 commit="" preedit="ni hao" cands=*菴螂ｽ 窓 諡溷･ｽ 菴 蟆ｼ 豕･ 騾・    space eaten=1 commit="菴螂ｽ" preedit="" cands=
+   log: 1790263644 librime 1.17.0 shared=C:\Users\Public\edime-test\data user=C:\Users\cheny\AppData\Local\Temp\edime-ascii
+   log: 1790263644 rime: deploy start
+   log: 1790263656 rime: deploy success
+   log: 1790263656 mozc 24.11.oss
+   log: 1790263656 rime: option _auto_commit
+   log: 1790263656 rime: option emoji
+   log: 1790263656 rime: schema double_pinyin_mspy/蠕ｮ霓ｯ蜿梧蕎

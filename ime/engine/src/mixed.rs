@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 pub enum Lang {
     Zh,
     Ja,
+    En,
 }
 
 /// One entry of the merged candidate list.
@@ -121,7 +122,8 @@ pub fn ja_info(v: &JaView) -> JaInfo {
     let valid = crate::mozc::romaji_valid(&v.preedit);
     // Mozc leaves a candidate's key empty when it is the reading itself.
     let complete = valid && !v.preedit.chars().last().map(|c| c.is_ascii_alphabetic() || ('\u{FF21}'..='\u{FF5A}').contains(&c)).unwrap_or(true);
-    let hit = complete && v.candidates.iter().take(8).any(|c| c.segments <= 1 && (c.key.is_empty() || c.key == v.reading) && !transliteration(c));
+    // A single kana (に = 二) says nothing: every letter pair is one.
+    let hit = complete && v.reading.chars().count() >= 2 && v.candidates.iter().take(8).any(|c| c.segments <= 1 && (c.key.is_empty() || c.key == v.reading) && !transliteration(c));
     JaInfo { valid, hit, complete }
 }
 
@@ -136,11 +138,16 @@ pub struct Ctx {
 
 /// Scores (None = cannot be that language).
 pub fn score(zh: ZhInfo, ja: JaInfo, ctx: Ctx) -> (Option<f32>, Option<f32>) {
-    let mut sz = zh.valid.then_some(1.0f32);
+    // Chinese is the default language: it leads unless something says
+    // otherwise (a Japanese word, Japanese just typed, habit).
+    let mut sz = zh.valid.then_some(1.4f32);
     let mut sj = ja.valid.then_some(1.0f32);
     if let Some(s) = sz.as_mut() {
+        // The whole input is a dictionary word (or two readings of it).
         if zh.whole >= 2 {
             *s += 1.0;
+        } else if zh.whole == 1 && !zh.partial {
+            *s += 0.8;
         }
         // A single syllable is always "a word"; leave it to the context.
         if zh.syllables <= 1 {
@@ -164,7 +171,7 @@ pub fn score(zh: ZhInfo, ja: JaInfo, ctx: Ctx) -> (Option<f32>, Option<f32>) {
     match ctx.last {
         Some(Lang::Zh) => sz = sz.map(|s| s + 0.6),
         Some(Lang::Ja) => sj = sj.map(|s| s + 0.6),
-        None => {}
+        Some(Lang::En) | None => {}
     }
     let total = ctx.zh_picks + ctx.ja_picks;
     if total > 0 {
@@ -178,7 +185,14 @@ pub fn score(zh: ZhInfo, ja: JaInfo, ctx: Ctx) -> (Option<f32>, Option<f32>) {
 /// Put the two lists together. The stronger side leads; when it clearly
 /// dominates it keeps the first four places, otherwise the other side's best
 /// comes second.
+#[allow(dead_code)]
 pub fn merge(zh: &[Candidate], ja: &[JaCand], sz: Option<f32>, sj: Option<f32>) -> Vec<Merged> {
+    merge_with(zh, ja, sz, sj, true)
+}
+
+/// `loser_real`: the losing side has a real word for the input (not only
+/// guesses); if not, it waits until the winner's first five.
+pub fn merge_with(zh: &[Candidate], ja: &[JaCand], sz: Option<f32>, sj: Option<f32>, loser_real: bool) -> Vec<Merged> {
     let zs: Vec<Merged> = zh
         .iter()
         .enumerate()
@@ -201,7 +215,7 @@ pub fn merge(zh: &[Candidate], ja: &[JaCand], sz: Option<f32>, sj: Option<f32>) 
             }
         }
     };
-    let lead = if gap >= 1.0 { 4 } else { 1 };
+    let lead = if !loser_real { 5 } else if gap >= 1.0 { 4 } else { 1 };
     let mut out = Vec::with_capacity(w.len() + l.len());
     let (mut wi, mut li) = (w.into_iter(), l.into_iter());
     out.extend(wi.by_ref().take(lead));
@@ -218,6 +232,137 @@ pub fn merge(zh: &[Candidate], ja: &[JaCand], sz: Option<f32>, sj: Option<f32>) 
     let mut seen = std::collections::HashSet::new();
     out.retain(|m| seen.insert(m.text.clone()));
     out
+}
+
+// --- English ----------------------------------------------------------------------
+
+/// English words from the shipped dictionaries (rime-ice en_dicts), keyed by
+/// their lower-case spelling, with the spellings people use ("iPhone",
+/// "GitHub", "Inbox").
+#[derive(Default)]
+pub struct EnDict {
+    map: HashMap<String, Vec<String>>,
+    /// How the user writes a word (from their own documents), first.
+    prefer: HashMap<String, String>,
+}
+
+impl EnDict {
+    pub fn load(dir: &Path) -> EnDict {
+        let mut d = EnDict::default();
+        for f in ["en.dict.yaml", "en_ext.dict.yaml"] {
+            let Ok(text) = std::fs::read_to_string(dir.join(f)) else { continue };
+            let body = text.split_once("\n...").map(|(_, b)| b).unwrap_or("");
+            for line in body.lines() {
+                if line.starts_with('#') || line.is_empty() {
+                    continue;
+                }
+                let word = line.split('\t').next().unwrap_or("").trim();
+                d.add(word);
+            }
+        }
+        d
+    }
+
+    /// en_personal.txt: one word per line, in the user's casing.
+    pub fn load_personal(&mut self, file: &Path) {
+        let Ok(text) = std::fs::read_to_string(file) else { return };
+        for w in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+            self.add(w);
+            self.prefer.insert(w.to_ascii_lowercase(), w.to_string());
+        }
+    }
+
+    pub fn add(&mut self, word: &str) {
+        if word.len() < 2 || !word.chars().all(|c| c.is_ascii_alphabetic()) {
+            return;
+        }
+        let forms = self.map.entry(word.to_ascii_lowercase()).or_default();
+        if !forms.iter().any(|f| f == word) {
+            forms.push(word.to_string());
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Spellings for what was typed, best first. At the start of a
+    /// sentence a lower-case word is also offered capitalised (first).
+    pub fn lookup(&self, typed: &str, sentence_start: bool) -> Vec<String> {
+        let Some(forms) = self.map.get(&typed.to_ascii_lowercase()) else { return Vec::new() };
+        let mut out: Vec<String> = Vec::new();
+        // A proper spelling (iPhone, GitHub) beats the plain one.
+        let mut sorted = forms.clone();
+        sorted.sort_by_key(|f| (f.chars().all(|c| c.is_ascii_lowercase()), f.clone()));
+        if let Some(p) = self.prefer.get(&typed.to_ascii_lowercase()) {
+            sorted.retain(|f| f != p);
+            sorted.insert(0, p.clone());
+        }
+        for f in sorted {
+            if sentence_start && f.chars().all(|c| c.is_ascii_lowercase()) {
+                let mut c = f.chars();
+                let cap: String = c.next().map(|h| h.to_ascii_uppercase()).into_iter().chain(c).collect();
+                if !out.contains(&cap) {
+                    out.push(cap);
+                }
+            }
+            if !out.contains(&f) {
+                out.push(f);
+            }
+        }
+        out
+    }
+}
+
+/// Is the next word the start of a sentence (after our own output)?
+pub fn sentence_start(recent: &str) -> bool {
+    match recent.trim_end_matches(' ').chars().last() {
+        None => true,
+        Some(c) => ".!?。！？\n".contains(c),
+    }
+}
+
+/// Score of the English reading of `typed` (None = not an English word).
+/// Short words are weak: "de", "he", "the" are far more often pinyin.
+pub fn en_score(typed: &str, hit: bool, last: Option<Lang>) -> Option<f32> {
+    if !hit {
+        return None;
+    }
+    // Just under a Chinese reading that is a real word (1.4 + 1.0), above
+    // one that is only a made-up sentence (1.4).
+    let mut s = 1.9f32;
+    let n = typed.chars().count();
+    if n <= 3 {
+        s -= 0.6;
+    } else if n >= 5 {
+        s += 0.3;
+    }
+    if last == Some(Lang::En) {
+        s += 0.6;
+    }
+    Some(s)
+}
+
+/// Put the English candidates into the merged list: first if English wins,
+/// second if it is close, otherwise after the third.
+pub fn insert_english(merged: &mut Vec<Merged>, words: &[String], se: f32, best_other: Option<f32>) {
+    let pos = match best_other {
+        None => 0,
+        Some(b) if se > b => 0,
+        Some(b) if se >= b - 0.6 => 1,
+        Some(_) => 3,
+    }
+    .min(merged.len());
+    let items: Vec<Merged> = words
+        .iter()
+        .enumerate()
+        .map(|(i, w)| Merged { lang: Lang::En, key: i as i64, text: w.clone(), comment: "英".into() })
+        .collect();
+    merged.retain(|m| !words.contains(&m.text));
+    let pos = pos.min(merged.len());
+    for (k, it) in items.into_iter().enumerate() {
+        merged.insert(pos + k, it);
+    }
 }
 
 // --- Which language an input usually is ------------------------------------------
@@ -255,6 +400,7 @@ impl LangPref {
         match lang {
             Lang::Zh => e.0 = e.0.saturating_add(1),
             Lang::Ja => e.1 = e.1.saturating_add(1),
+            Lang::En => {}
         }
         e.2 = self.tick;
         if self.map.len() > PREF_CAP {
@@ -357,6 +503,31 @@ mod tests {
         // Habit wins over a weak context.
         let (a, b) = score(zh, ja, Ctx { last: Some(Lang::Zh), zh_picks: 0, ja_picks: 5 });
         assert!(b.unwrap() > a.unwrap());
+    }
+
+    #[test]
+    fn english() {
+        let mut d = EnDict::default();
+        for w in ["inbox", "Inbox", "iPhone", "the", "GitHub"] {
+            d.add(w);
+        }
+        assert_eq!(d.lookup("inbox", false), ["Inbox", "inbox"]);
+        assert_eq!(d.lookup("iphone", true), ["iPhone"]);
+        assert_eq!(d.lookup("github", false), ["GitHub"]);
+        assert!(d.lookup("sss", false).is_empty());
+        let mut d2 = EnDict::default();
+        d2.add("hello");
+        assert_eq!(d2.lookup("hello", true), ["Hello", "hello"]);
+        assert!(sentence_start("你好。"));
+        assert!(!sentence_start("我在用"));
+        // inbox: Chinese reads only a sentence (1.4), Japanese is half-typed.
+        let se = en_score("inbox", true, None).unwrap();
+        assert!(se > 1.4 + 0.5);
+        let mut m = vec![Merged { lang: Lang::Ja, key: 1, text: "韻母x".into(), comment: "日".into() }];
+        insert_english(&mut m, &["Inbox".into(), "inbox".into()], se, Some(1.4));
+        assert_eq!(m[0].text, "Inbox");
+        // "the" is weak against Chinese.
+        assert!(en_score("the", true, None).unwrap() <= 1.4);
     }
 
     #[test]

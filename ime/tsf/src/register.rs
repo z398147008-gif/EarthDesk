@@ -94,6 +94,22 @@ fn icon_path() -> String {
     }
 }
 
+/// The keyboard layout Windows should use while we are active. Chinese
+/// profiles default to the US layout, which on a Japanese (JIS) keyboard puts
+/// half the symbols on the wrong keys (、 ¥ @ : ...); on such keyboards we
+/// ask for the Japanese layout instead.
+fn keyboard_layout() -> HKL {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardType, LoadKeyboardLayoutW, KLF_NOTELLSHELL};
+    unsafe {
+        if GetKeyboardType(0) == 7 {
+            if let Ok(h) = LoadKeyboardLayoutW(windows::core::w!("00000411"), KLF_NOTELLSHELL) {
+                return h;
+            }
+        }
+    }
+    HKL::default()
+}
+
 pub fn register() -> Result<()> {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -106,7 +122,7 @@ pub fn register() -> Result<()> {
         // (some Windows builds and compatibility layers lack the new one).
         let mgr = CoCreateInstance::<_, ITfInputProcessorProfileMgr>(&CLSID_TF_InputProcessorProfiles, None, CLSCTX_INPROC_SERVER);
         let done = match &mgr {
-            Ok(m) => m.RegisterProfile(&CLSID, LANG_ZH_CN, &PROFILE, &desc, &icon, 0, HKL::default(), 0, true, 0).is_ok(),
+            Ok(m) => m.RegisterProfile(&CLSID, LANG_ZH_CN, &PROFILE, &desc, &icon, 0, keyboard_layout(), 0, true, 0).is_ok(),
             Err(_) => false,
         };
         if !done {

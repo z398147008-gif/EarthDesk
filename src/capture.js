@@ -1342,9 +1342,9 @@ function hideAll() {
   actx.clearRect(0, 0, W, H);
 }
 
-async function cancel() {
+async function cancel(reason) {
   hideAll();
-  await invoke("capture_cancel").catch(() => {});
+  await invoke("capture_cancel", reason ? { reason: String(reason) } : {}).catch(() => {});
 }
 
 async function finish(op) {
@@ -1383,7 +1383,48 @@ listen("capture:pin", () => {
   if (S && mode === "selected") finish("pin");
 });
 
-listen("capture:start", async (e) => {
+// The frozen screen arrives through WebView2 shared memory (see
+// capture/shared.rs), usually just before capture:start.
+let shared = null; // { id, buf }
+let sharedWait = null;
+if (window.chrome?.webview?.addEventListener) {
+  window.chrome.webview.addEventListener("sharedbufferreceived", (e) => {
+    let info = {};
+    try { info = typeof e.additionalData === "string" ? JSON.parse(e.additionalData) : (e.additionalData || {}); } catch {}
+    shared = { id: info.id, buf: e.getBuffer() };
+    if (sharedWait && sharedWait.id === info.id) sharedWait.done();
+  });
+}
+function sharedFrame(id, ms) {
+  if (shared && shared.id === id) return Promise.resolve(shared.buf);
+  return new Promise((res) => {
+    const t = setTimeout(() => { sharedWait = null; res(null); }, ms);
+    sharedWait = { id, done: () => { clearTimeout(t); sharedWait = null; res(shared.buf); } };
+  });
+}
+
+// Windows to snap to come separately (listing them can be slow).
+let pendingWins = null; // may arrive before capture:start
+function takeWins(p) {
+  wins = (p.windows || []).map((w) => ({ hwnd: w.hwnd, r: rel(w.rect), children: (w.children || []).map(rel) }));
+}
+listen("capture:windows", (e) => {
+  if (!S || e.payload.id !== S.id) {
+    pendingWins = e.payload;
+    return;
+  }
+  takeWins(e.payload);
+  if (mode === "detect") updateHover();
+});
+
+listen("capture:start", (e) => {
+  startCapture(e).catch((err) => {
+    console.error(err);
+    cancel(`start: ${err && err.message ? err.message : err}`);
+  });
+});
+
+async function startCapture(e) {
   reset();
   S = e.payload;
   dpr = window.devicePixelRatio || 1;
@@ -1391,6 +1432,8 @@ listen("capture:start", async (e) => {
   [W, H] = S.size;
   monitors = (S.monitors || []).map((m) => ({ x: m.x - OX, y: m.y - OY, w: m.w, h: m.h }));
   wins = (S.windows || []).map((w) => ({ hwnd: w.hwnd, r: rel(w.rect), children: (w.children || []).map(rel) }));
+  if (pendingWins && pendingWins.id === S.id) takeWins(pendingWins);
+  pendingWins = null;
   for (const c of [base, ann]) {
     if (c.width !== W || c.height !== H) {
       c.width = W;
@@ -1400,16 +1443,34 @@ listen("capture:start", async (e) => {
     c.style.height = css(H);
   }
   const id = S.id;
-  let buf;
-  try {
-    buf = await invoke("capture_frame", { id });
-  } catch (err) {
-    console.error(err);
-    return cancel();
+  const t0 = performance.now();
+  let buf = S.shared ? await sharedFrame(id, 800) : null;
+  const via = buf ? "shared" : "ipc";
+  if (!buf) {
+    try {
+      buf = await invoke("capture_frame", { id });
+    } catch (err) {
+      console.error(err);
+      return cancel();
+    }
   }
   if (!S || S.id !== id) return;
-  pix = new Uint8ClampedArray(buf);
-  bctx.putImageData(new ImageData(pix, W, H), 0, 0);
+  const t1 = performance.now();
+  try {
+    pix = new Uint8ClampedArray(buf);
+    try {
+      bctx.putImageData(new ImageData(pix, W, H), 0, 0);
+    } catch {
+      // Some WebView2 versions refuse an ImageData over shared memory:
+      // copy it into an ordinary array first.
+      pix = new Uint8ClampedArray(pix);
+      bctx.putImageData(new ImageData(pix, W, H), 0, 0);
+    }
+  } catch (err) {
+    console.error(err);
+    return cancel(`draw ${via} ${W}x${H}: ${err && err.message ? err.message : err}`);
+  }
+  const t2 = performance.now();
   actx.clearRect(0, 0, W, H);
   mode = "detect";
   if (S.preset) {
@@ -1429,7 +1490,7 @@ listen("capture:start", async (e) => {
       console.error(err);
     }
   }
-  await invoke("capture_ready");
+  await invoke("capture_ready", { timing: `${via} ${Math.round(t1 - t0)} ms, draw ${Math.round(t2 - t1)} ms` });
   // The window may have been rescaled to another monitor's DPI while it
   // was being placed; everything is in physical pixels, so just re-read.
   if (Math.abs(window.devicePixelRatio - dpr) > 0.01) {
@@ -1447,4 +1508,4 @@ listen("capture:start", async (e) => {
     if (pos) cursor = { x: clamp(pos[0] - OX, 0, W - 1), y: clamp(pos[1] - OY, 0, H - 1) };
     updateHover();
   }
-});
+}

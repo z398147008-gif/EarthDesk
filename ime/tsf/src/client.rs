@@ -76,8 +76,11 @@ pub struct Client {
     conn: Option<Conn>,
     session: u64,
     notify: u64,
+    /// We draw the candidate window ourselves (see candwin.rs).
+    draws: bool,
     last_try: Option<Instant>,
-    started_engine: bool,
+    /// When we last started the engine (it may have crashed since).
+    started_engine: Option<Instant>,
 }
 
 fn session_id() -> u32 {
@@ -88,7 +91,7 @@ fn session_id() -> u32 {
     sid
 }
 
-fn exe_name() -> String {
+pub fn exe_name() -> String {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()))
@@ -148,8 +151,8 @@ fn start_engine() {
 }
 
 impl Client {
-    pub fn new(notify: u64) -> Client {
-        Client { conn: None, session: 0, notify, last_try: None, started_engine: false }
+    pub fn new(notify: u64, draws: bool) -> Client {
+        Client { conn: None, session: 0, notify, draws, last_try: None, started_engine: None }
     }
 
     fn connect(&mut self) -> bool {
@@ -181,8 +184,10 @@ impl Client {
                 h = open();
             }
             let Ok(pipe) = h else {
-                if !self.started_engine && may_start_engine() {
-                    self.started_engine = true;
+                // Start it (again, if it went away), at most every 10 s.
+                let due = self.started_engine.map(|t| t.elapsed() > Duration::from_secs(10)).unwrap_or(true);
+                if due && may_start_engine() {
+                    self.started_engine = Some(Instant::now());
                     start_engine();
                 }
                 return false;
@@ -195,7 +200,7 @@ impl Client {
             };
             self.conn = Some(Conn { pipe, event });
         }
-        let hello = Request::Hello { version: ime_proto::VERSION, pid: unsafe { GetCurrentProcessId() }, exe: exe_name(), notify: self.notify };
+        let hello = Request::Hello { version: ime_proto::VERSION, pid: unsafe { GetCurrentProcessId() }, exe: exe_name(), notify: self.notify, draws: self.draws };
         match self.raw(&hello) {
             Some(Reply::Hello { session, .. }) => {
                 self.session = session;
@@ -229,6 +234,24 @@ impl Client {
         }
         let req = make(self.session);
         self.raw(&req)
+    }
+
+    /// The key as Windows reported it. Err(()) = the engine does not know
+    /// RawKey (older version): convert here and use `key`.
+    pub fn raw_key(&mut self, vk: u16, scan: u16, flags: u32, hkl: u64) -> Result<Option<State>, ()> {
+        match self.call(|session| Request::RawKey { session, vk, scan, flags, hkl }) {
+            Some(Reply::State(s)) => Ok(Some(s)),
+            Some(Reply::Error { .. }) => Err(()),
+            _ => Ok(None),
+        }
+    }
+
+    /// A click in our own candidate window.
+    pub fn pick(&mut self, index: Option<u32>, page: Option<bool>) -> Option<State> {
+        match self.call(|session| Request::Pick { session, index, page })? {
+            Reply::State(s) => Some(s),
+            _ => None,
+        }
     }
 
     pub fn key(&mut self, keycode: u32, mask: u32) -> Option<State> {

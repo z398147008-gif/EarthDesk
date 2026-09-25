@@ -2,6 +2,7 @@
 //! the candidate window.
 
 mod candwin;
+pub mod keyconv;
 mod pipe;
 pub mod setup;
 

@@ -17,6 +17,8 @@
 
 pub mod encode;
 #[cfg(windows)]
+mod shared;
+#[cfg(windows)]
 pub mod win;
 
 use serde::{Deserialize, Serialize};
@@ -52,6 +54,17 @@ pub struct Preset {
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 static BUSY: AtomicBool = AtomicBool::new(false);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+/// The last session whose page said it has drawn the frame.
+static READY: AtomicU64 = AtomicU64::new(0);
+/// How long the page may take to show the frozen screen before the capture
+/// is called off. The freeze window covers every screen and takes no input,
+/// so a page that never answers must not leave it up.
+const READY_TIMEOUT_MS: u64 = 4000;
+/// The pixels go to the page by IPC. Handing them over as a WebView2 shared
+/// buffer (capture/shared.rs) was faster on one screen but on a 5760x2160
+/// three-monitor desktop the page never answered and the app's main thread
+/// stopped, freezing the screen; it stays off.
+static SHARED_OFF: AtomicBool = AtomicBool::new(true);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Region {
@@ -95,12 +108,14 @@ pub fn init(_app: &AppHandle) {
 /// Ends the session; returns the pin that was being edited, if any.
 fn end_session(app: &AppHandle) -> Option<u64> {
     let preset = SESSION.lock().ok().and_then(|mut s| s.take()).and_then(|s| s.preset).map(|p| p.pin);
-    if let Some(w) = app.get_webview_window(LABEL) {
-        let _ = w.hide();
-    }
+    // The freeze window first: it has its own thread, so it goes away even
+    // if the app's main thread is stuck.
     #[cfg(windows)]
     win::freeze_hide();
     BUSY.store(false, Ordering::SeqCst);
+    if let Some(w) = app.get_webview_window(LABEL) {
+        let _ = w.hide();
+    }
     preset
 }
 
@@ -132,14 +147,31 @@ pub fn start_with(app: &AppHandle, preset: Option<Preset>) {
                 std::thread::sleep(std::time::Duration::from_millis(80));
             }
             let cfg = crate::toolkit::current();
+            let t0 = std::time::Instant::now();
             let Some(frame) = win::grab(cfg.capture.include_cursor) else {
                 crate::toolkit::log("capture: could not copy the screen");
                 BUSY.store(false, Ordering::SeqCst);
                 return;
             };
+            let t_grab = t0.elapsed().as_millis();
             win::freeze_show(&frame);
-            let windows = if cfg.capture.detect_elements { win::windows_front_to_back() } else { Vec::new() };
             let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+            {
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(READY_TIMEOUT_MS));
+                    let current = SESSION.lock().ok().and_then(|s| s.as_ref().map(|s| s.id)) == Some(id);
+                    if current && READY.load(Ordering::SeqCst) != id {
+                        crate::toolkit::log(&format!("capture {id}: the page did not show the screen within {READY_TIMEOUT_MS} ms, cancelled"));
+                        SHARED_OFF.store(true, Ordering::SeqCst);
+                        #[cfg(windows)]
+                        win::freeze_hide();
+                        if let Some(pin) = end_session(&app) {
+                            crate::pins::restore(&app, pin);
+                        }
+                    }
+                });
+            }
             let (x, y, w, h) = (frame.x, frame.y, frame.w, frame.h);
             if let Ok(mut s) = SESSION.lock() {
                 *s = Some(Session { id, w, h, bgra: frame.bgra.clone(), preset: preset.clone() });
@@ -154,17 +186,31 @@ pub fn start_with(app: &AppHandle, preset: Option<Preset>) {
                     json!({ "x": p.x, "y": p.y, "w": s.width, "h": s.height, "scale": m.scale_factor() })
                 })
                 .collect();
+            // Windows to snap to are listed in parallel and sent when ready:
+            // with many windows open that takes longer than everything else.
+            if cfg.capture.detect_elements {
+                let app3 = app.clone();
+                std::thread::spawn(move || {
+                    let t = std::time::Instant::now();
+                    let windows = win::windows_front_to_back();
+                    crate::toolkit::log(&format!("capture {id}: {} windows listed in {} ms", windows.len(), t.elapsed().as_millis()));
+                    if SESSION.lock().ok().and_then(|s| s.as_ref().map(|s| s.id)) == Some(id) {
+                        let _ = app3.emit_to(LABEL, "capture:windows", json!({ "id": id, "windows": windows }));
+                    }
+                });
+            }
             let payload = json!({
                 "id": id,
                 "origin": [x, y],
                 "size": [w, h],
                 "monitors": monitors,
-                "windows": windows,
+                "windows": [],
                 "history": load_history(),
                 "settings": &cfg.capture,
                 "preset": preset.as_ref().map(|p| json!({ "pin": p.pin, "rect": [p.x, p.y, p.w, p.h] })),
             });
             let app2 = app.clone();
+            let bgra = frame.bgra.clone();
             let _ = app.run_on_main_thread(move || {
                 let Some(page) = app2.get_webview_window(LABEL) else {
                     end_session(&app2);
@@ -173,7 +219,40 @@ pub fn start_with(app: &AppHandle, preset: Option<Preset>) {
                 if let Ok(hwnd) = page.hwnd() {
                     win::place_below_freeze(hwnd.0 as isize, x, y, w, h);
                 }
-                let _ = page.emit("capture:start", payload);
+                // The pixels go through shared memory; the page falls back
+                // to capture_frame if that is not available.
+                let mut payload = payload;
+                if SHARED_OFF.load(Ordering::SeqCst) {
+                    payload["shared"] = json!(false);
+                    let _ = page.emit("capture:start", payload);
+                    crate::toolkit::log(&format!("capture {id}: {w}x{h} grab {t_grab} ms"));
+                    return;
+                }
+                let page2 = page.clone();
+                let r = page.with_webview(move |wv| {
+                    let t = std::time::Instant::now();
+                    let info = json!({ "id": id, "w": w, "h": h }).to_string();
+                    let ok = if SHARED_OFF.load(Ordering::SeqCst) {
+                        false
+                    } else {
+                        match shared::post(&wv.controller(), &wv.environment(), &bgra, &info) {
+                            Ok(()) => true,
+                            Err(e) => {
+                                crate::toolkit::log(&format!("capture: shared buffer unavailable ({e}), using IPC"));
+                                false
+                            }
+                        }
+                    };
+                    crate::toolkit::log(&format!("capture {id}: {w}x{h} grab {t_grab} ms, shared {} ms", t.elapsed().as_millis()));
+                    payload["shared"] = json!(ok);
+                    // Not from inside with_webview: emit from another thread.
+                    std::thread::spawn(move || {
+                        let _ = page2.emit("capture:start", payload);
+                    });
+                });
+                if r.is_err() {
+                    let _ = page.emit("capture:start", json!({ "id": id, "origin": [x, y], "size": [w, h], "shared": false }));
+                }
             });
         }
         #[cfg(not(windows))]
@@ -194,21 +273,37 @@ pub async fn capture_frame(id: u64) -> Result<tauri::ipc::Response, String> {
         let s = g.as_ref().filter(|s| s.id == id).ok_or("截图已结束")?;
         (s.bgra.clone(), s.w, s.h)
     };
-    let mut out = Vec::with_capacity((w as usize) * (h as usize) * 4);
-    for px in bgra.chunks_exact(4) {
-        out.extend_from_slice(&[px[2], px[1], px[0], 255]);
+    let t = std::time::Instant::now();
+    let mut out = bgra.as_ref().clone();
+    for px in out.chunks_exact_mut(4) {
+        px.swap(0, 2);
+        px[3] = 255;
     }
+    crate::toolkit::log(&format!("capture {id}: page asked for the frame, {w}x{h} ready in {} ms", t.elapsed().as_millis()));
     Ok(tauri::ipc::Response::new(out))
 }
 
 /// The page has drawn the frame: show it and take the keyboard. The freeze
 /// window stays on top until `capture_shown`.
 #[tauri::command]
-pub fn capture_ready(app: AppHandle) {
+pub fn capture_ready(app: AppHandle, timing: Option<String>) {
+    if let Some(t) = timing {
+        crate::toolkit::log(&format!("capture page: {t}"));
+    }
     // Safety net: if the page never reports that it has painted (a WebView
     // that decides it is covered stops painting), the freeze window must
     // not stay up forever.
     let id = SESSION.lock().ok().and_then(|s| s.as_ref().map(|s| s.id));
+    match id {
+        Some(id) => READY.store(id, Ordering::SeqCst),
+        // Too late: the capture was already called off.
+        None => {
+            if let Some(page) = app.get_webview_window(LABEL) {
+                let _ = page.hide();
+            }
+            return;
+        }
+    }
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(350));
         let still = SESSION.lock().ok().and_then(|s| s.as_ref().map(|s| s.id)) == id;
@@ -252,7 +347,11 @@ pub async fn capture_elements(hwnd: isize) -> Vec<[i32; 4]> {
 }
 
 #[tauri::command]
-pub fn capture_cancel(app: AppHandle) {
+pub fn capture_cancel(app: AppHandle, reason: Option<String>) {
+    if let Some(r) = reason {
+        crate::toolkit::log(&format!("capture cancelled by the page: {r}"));
+        SHARED_OFF.store(true, Ordering::SeqCst);
+    }
     if let Some(pin) = end_session(&app) {
         crate::pins::restore(&app, pin);
     }

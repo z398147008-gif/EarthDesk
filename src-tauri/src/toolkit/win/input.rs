@@ -7,7 +7,7 @@ use crate::toolkit::keys::{self, Combo, ALT, CTRL, SHIFT, WIN};
 use std::sync::atomic::{AtomicU16, Ordering};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
-pub const MAGIC: usize = 0x4544_4B31; // "EDK1"
+pub const MAGIC: usize = ime_proto::INJECTED; // "EDK1"; the input method lets these keys through
 
 /// An unassigned virtual-key code. Pressing it between a modifier going down
 /// and up stops Windows treating that as "Alt alone" (menu bar) or "Win
@@ -145,8 +145,23 @@ pub fn press(combo: Combo) {
             pressed.push(vk);
         }
     }
+    // The modifiers stay down a moment around the key: an input method (or
+    // a busy program) may look at whether Ctrl is down only when it gets to
+    // the key, and with everything sent at once Ctrl is already up by then
+    // (Ctrl+W then arrives as a plain "w").
+    let with_mods = !pressed.is_empty() || combo.mods != 0;
+    if with_mods {
+        send(&v);
+        v.clear();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
     v.push(key(combo.vk, false));
     v.push(key(combo.vk, true));
+    if with_mods {
+        send(&v);
+        v.clear();
+        std::thread::sleep(std::time::Duration::from_millis(80));
+    }
     if pressed.iter().any(|k| keys::modifier_bit(*k) & (ALT | WIN) != 0) {
         v.push(key(MASK_VK, false));
         v.push(key(MASK_VK, true));

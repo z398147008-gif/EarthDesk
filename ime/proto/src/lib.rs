@@ -7,13 +7,30 @@
 //!
 //! The DLL knows nothing about pinyin or candidates: it forwards keys,
 //! shows the preedit (the underlined text) it is told to show, and inserts
-//! what it is told to commit. The engine owns the candidate window.
+//! what it is told to commit. The engine owns the candidate window, except
+//! in immersive hosts (the Start menu's search), where the DLL draws it from
+//! what the engine sends in `State::cands` (see `Request::Hello::draws`).
 
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
 /// Bumped when a message changes shape; both sides check it in Hello.
 pub const VERSION: u32 = 1;
+
+/// dwExtraInfo of the keys 地球桌面 itself sends (gestures, hotkeys:
+/// "Ctrl+W" and the like). The input method lets them through untouched.
+pub const INJECTED: usize = 0x4544_4B31;
+
+/// Bits of `Request::RawKey::flags`.
+pub mod rawkey {
+    pub const UP: u32 = 1 << 0;
+    pub const EXTENDED: u32 = 1 << 1;
+    pub const SHIFT: u32 = 1 << 2;
+    pub const CONTROL: u32 = 1 << 3;
+    pub const ALT: u32 = 1 << 4;
+    /// Caps Lock is on (after this key, as Windows reports it).
+    pub const CAPS: u32 = 1 << 5;
+}
 
 /// Rime's (X11 keysym) modifier bits, which the DLL sends as `mask`.
 pub mod mask {
@@ -81,9 +98,20 @@ pub enum Request {
         exe: String,
         /// The DLL's message-only window for `WM_NOTIFY_OFFSET`.
         notify: u64,
+        /// The DLL draws the candidate window itself, inside the host (the
+        /// Start menu's search and other immersive programs, whose windows
+        /// sit in a layer no ordinary topmost window can reach). The engine
+        /// then sends the candidates in `State::cands` instead of showing
+        /// its own window. Older DLLs leave it out.
+        #[serde(default)]
+        draws: bool,
     },
     /// A key went down (or up, with mask::RELEASE).
     Key { session: u64, keycode: u32, mask: u32 },
+    /// A key exactly as Windows reported it (see `rawkey`); the engine turns
+    /// it into a Rime key itself, so fixes to key handling reach programs
+    /// that are already open when the engine is restarted.
+    RawKey { session: u64, vk: u16, scan: u16, flags: u32, hkl: u64 },
     /// Where the text caret is, in physical screen pixels (bottom-left of
     /// the composition's caret, plus the line height).
     Caret { session: u64, x: i32, y: i32, h: i32 },
@@ -91,11 +119,21 @@ pub enum Request {
     Focus { session: u64, on: bool },
     /// Fetch what changed after a notification.
     Poll { session: u64 },
+    /// From a DLL that draws the candidates itself: a candidate on the
+    /// current page was clicked (`index`), or a page arrow / the wheel
+    /// (`page` = Some(backward)). Answered with the resulting State.
+    Pick { session: u64, index: Option<u32>, page: Option<bool> },
     /// Throw the current composition away (the document lost focus).
     Reset { session: u64 },
     Bye { session: u64 },
+    /// From the DLL: something went wrong on its side (an edit session the
+    /// program refused...). Written to ime.log; never contains typed text.
+    Note { session: u64, message: String },
     /// From the EarthDesk settings page: is the engine alive, is it busy.
     Status,
+    /// From EarthDesk (tray 「刷新所有组件」): save and quit; EarthDesk starts
+    /// the engine again.
+    Restart,
     /// From the EarthDesk settings page: settings.json changed (or the user
     /// asked to rebuild): rewrite the Rime patches and redeploy.
     Deploy,
@@ -123,6 +161,34 @@ pub struct State {
     /// ひらがな / カタカナ). Older DLLs ignore it.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub delete_before: u32,
+    /// Only for sessions whose DLL draws the candidates (`Hello::draws`):
+    /// what the candidate window should do now. None = leave it as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cands: Option<CandUi>,
+}
+
+/// What the candidate window shows (the engine's `View`, minus bookkeeping).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Cands {
+    /// The spelling ("ni hao", "你 hao" after a partial pick, "わたし").
+    pub preedit: String,
+    /// (text, comment) for each candidate on the page.
+    pub candidates: Vec<(String, String)>,
+    pub labels: Vec<String>,
+    pub highlighted: i32,
+    pub page_no: i32,
+    pub last_page: bool,
+    /// A short notice (mode switched): no page arrows, hides by itself.
+    pub flash: bool,
+    /// A column instead of a row (a Japanese word's other spellings).
+    pub vertical: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum CandUi {
+    Hide,
+    Show { view: Cands },
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -200,6 +266,16 @@ pub mod keysym {
     pub const ALT_R: u32 = 0xffea;
     pub const DELETE: u32 = 0xffff;
     pub const KP_0: u32 = 0xffb0;
+    pub const KP_MULTIPLY: u32 = 0xffaa;
+    pub const KP_ADD: u32 = 0xffab;
+    pub const KP_SEPARATOR: u32 = 0xffac;
+    pub const KP_SUBTRACT: u32 = 0xffad;
+    pub const KP_DECIMAL: u32 = 0xffae;
+    pub const KP_DIVIDE: u32 = 0xffaf;
+    /// Any numeric keypad key (digits, operators, decimal point).
+    pub fn is_keypad(code: u32) -> bool {
+        (KP_MULTIPLY..=KP_0 + 9).contains(&code)
+    }
 }
 
 #[cfg(test)]
@@ -213,10 +289,18 @@ mod tests {
         write_frame(&mut buf, &r).unwrap();
         let back: Request = read_frame(&mut buf.as_slice()).unwrap();
         assert_eq!(r, back);
-        let s = Reply::State(State { eaten: true, commit: Some("你好".into()), preedit: None, ascii: false, delete_before: 0 });
+        let s = Reply::State(State { eaten: true, commit: Some("你好".into()), preedit: None, ascii: false, delete_before: 0, cands: None });
         let mut buf = Vec::new();
         write_frame(&mut buf, &s).unwrap();
         assert_eq!(read_frame::<_, Reply>(&mut buf.as_slice()).unwrap(), s);
+        let view = Cands { preedit: "ni".into(), candidates: vec![("你".into(), String::new())], labels: vec!["1".into()], ..Default::default() };
+        let s = Reply::State(State { eaten: true, cands: Some(CandUi::Show { view }), ..Default::default() });
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &s).unwrap();
+        assert_eq!(read_frame::<_, Reply>(&mut buf.as_slice()).unwrap(), s);
+        // A Hello from an older DLL (no `draws`) still parses.
+        let old: Request = serde_json::from_str(r#"{"t":"hello","version":1,"pid":1,"exe":"a.exe","notify":0}"#).unwrap();
+        assert!(matches!(old, Request::Hello { draws: false, .. }));
     }
 
     #[test]

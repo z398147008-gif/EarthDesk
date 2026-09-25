@@ -64,7 +64,10 @@ pub fn grab(include_cursor: bool) -> Option<Frame> {
         let mut bits = std::ptr::null_mut();
         let bmp = CreateDIBSection(Some(mem), &bi, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
         let old = SelectObject(mem, bmp.into());
-        let ok = BitBlt(mem, 0, 0, w, h, Some(screen), x, y, SRCCOPY | CAPTUREBLT).is_ok();
+        // No CAPTUREBLT: with the desktop composited (Windows 8 and later) the
+        // screen DC already includes layered windows, and CAPTUREBLT makes the
+        // copy several times slower (and the cursor flicker).
+        let ok = BitBlt(mem, 0, 0, w, h, Some(screen), x, y, SRCCOPY).is_ok();
         if ok && include_cursor {
             let mut ci = CURSORINFO { cbSize: std::mem::size_of::<CURSORINFO>() as u32, ..Default::default() };
             if GetCursorInfo(&mut ci).is_ok() && ci.flags.0 & CURSOR_SHOWING.0 != 0 {

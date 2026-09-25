@@ -26,29 +26,45 @@
   dotnet_ok:
 !macroend
 
-;  地球桌面输入法 (ime\): a TSF text service. Its DLLs are loaded into every
-;  program the user types in, so an upgrade cannot overwrite them; a file in
-;  use can still be renamed, so the old copy is moved aside and deleted at
-;  the next reboot.
-!macro EARTHDESK_IME_MOVE_ASIDE ID NAME
-  IfFileExists "$INSTDIR\ime\${NAME}" 0 ime_aside_done_${ID}
-    Delete "$INSTDIR\ime\${NAME}.old*"
-    StrCpy $R1 0
-    ime_aside_loop_${ID}:
-      IntOp $R1 $R1 + 1
-      IfFileExists "$INSTDIR\ime\${NAME}.old$R1" ime_aside_loop_${ID}
-    Rename "$INSTDIR\ime\${NAME}" "$INSTDIR\ime\${NAME}.old$R1"
-    Delete /REBOOTOK "$INSTDIR\ime\${NAME}.old$R1"
-  ime_aside_done_${ID}:
+;  地球桌面输入法 (ime\): its DLLs are loaded into every program the user
+;  types in (and the engine's into EarthDeskIME.exe), and Windows' crash
+;  reporter or a virus scanner may hold them open too, so an upgrade cannot
+;  simply overwrite them. A file in use can still be renamed: every .dll and
+;  .exe in ime\ is moved aside (name.old1, .old2 ...) and deleted now if
+;  possible, otherwise later (see above). The new files go in cleanly and no
+;  restart is ever needed: programs opened from now on load the new ones.
+!macro EARTHDESK_IME_MOVE_ASIDE_ALL ID
+  Delete "$INSTDIR\ime\*.old*"
+  FindFirst $R2 $R3 "$INSTDIR\ime\*.*"
+  ime_all_loop_${ID}:
+    StrCmp $R3 "" ime_all_done_${ID}
+    StrCpy $R4 $R3 "" -4
+    StrCmp $R4 ".dll" ime_all_move_${ID}
+    StrCmp $R4 ".exe" ime_all_move_${ID} ime_all_next_${ID}
+    ime_all_move_${ID}:
+      StrCpy $R1 0
+      ime_all_n_${ID}:
+        IntOp $R1 $R1 + 1
+        IfFileExists "$INSTDIR\ime\$R3.old$R1" ime_all_n_${ID}
+      Rename "$INSTDIR\ime\$R3" "$INSTDIR\ime\$R3.old$R1"
+      ; No /REBOOTOK: a file still in use just stays (and never asks for a
+      ; restart); EarthDesk deletes leftovers when it next starts, and the
+      ; next installer tries again.
+      Delete "$INSTDIR\ime\$R3.old$R1"
+    ime_all_next_${ID}:
+    FindNext $R2 $R3
+    Goto ime_all_loop_${ID}
+  ime_all_done_${ID}:
+  FindClose $R2
 !macroend
 
-!macro EARTHDESK_IME_STOP
+!macro EARTHDESK_IME_STOP ID
   ; Ask the engine to save the user dictionary and quit, then make sure.
   nsExec::Exec 'taskkill /IM EarthDeskIME.exe'
   Sleep 1000
   nsExec::Exec 'taskkill /F /IM EarthDeskIME.exe'
-  !insertmacro EARTHDESK_IME_MOVE_ASIDE tsf64 "EarthDeskTSF.dll"
-  !insertmacro EARTHDESK_IME_MOVE_ASIDE tsf32 "EarthDeskTSF32.dll"
+  Sleep 300
+  !insertmacro EARTHDESK_IME_MOVE_ASIDE_ALL ${ID}
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL
@@ -61,7 +77,7 @@
   IfFileExists "$INSTDIR\lhm\setup-lhm.ps1" 0 +2
     nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\lhm\setup-lhm.ps1" uninstall'
   RMDir /r "$INSTDIR\lhm"
-  !insertmacro EARTHDESK_IME_STOP
+  !insertmacro EARTHDESK_IME_STOP inst
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -82,6 +98,16 @@
   DetailPrint "正在安装地球桌面输入法（部署词库约需一分钟）…"
   nsExec::ExecToLog '"$INSTDIR\ime\EarthDeskIME.exe" --register --enable --deploy'
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "EarthDeskIME" '"$INSTDIR\ime\EarthDeskIME.exe"'
+  ; Start the new engine right away, with the user's ordinary rights (Explorer
+  ; starts it, not this elevated installer), so programs that are already
+  ; open keep typing without a restart.
+  Exec '"$WINDIR\explorer.exe" "$INSTDIR\ime\EarthDeskIME.exe"'
+  ; The Start menu's search box (and the Start menu) keep the old DLL loaded
+  ; until they restart; since 1.2.8 the DLL draws the candidate window there
+  ; itself. Windows starts them again on their next use.
+  nsExec::Exec 'taskkill /F /IM SearchHost.exe'
+  nsExec::Exec 'taskkill /F /IM SearchApp.exe'
+  nsExec::Exec 'taskkill /F /IM StartMenuExperienceHost.exe'
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
@@ -94,6 +120,6 @@
   IfFileExists "$INSTDIR\ime\EarthDeskIME.exe" 0 +2
     nsExec::ExecToLog '"$INSTDIR\ime\EarthDeskIME.exe" --disable --unregister'
   DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "EarthDeskIME"
-  !insertmacro EARTHDESK_IME_STOP
+  !insertmacro EARTHDESK_IME_STOP uninst
 
 !macroend

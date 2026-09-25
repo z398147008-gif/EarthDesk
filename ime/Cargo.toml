@@ -4,7 +4,7 @@
 # x64. tools/build-ime.ps1 builds all of it into src-tauri/vendor/ime/.
 [workspace]
 resolver = "2"
-members = ["proto", "engine", "tsf"]
+members = ["proto", "candui", "engine", "tsf"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

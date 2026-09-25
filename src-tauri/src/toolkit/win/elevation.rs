@@ -337,6 +337,7 @@ pub fn tidy_after_start() {
     if !is_elevated() {
         return;
     }
+    remove_old_ime_files();
     let run = run_value_present();
     let installed = task_installed();
     let logon = task_autostart();
@@ -344,6 +345,20 @@ pub fn tidy_after_start() {
         let _ = install_task(run || logon);
     } else if run {
         remove_run_value();
+    }
+}
+
+/// An upgrade moves input-method files that were in use aside
+/// (EarthDeskTSF.dll.old1 ...) instead of asking for a restart. Once the
+/// programs that had them loaded are closed, they can go.
+fn remove_old_ime_files() {
+    let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("ime"))) else { return };
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.contains(".old") && (name.contains(".dll") || name.contains(".exe")) {
+            let _ = std::fs::remove_file(e.path());
+        }
     }
 }
 

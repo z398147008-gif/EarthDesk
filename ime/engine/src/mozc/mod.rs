@@ -223,6 +223,42 @@ impl Mozc {
         self.eval(input).map(|o| view(&o))
     }
 
+    /// Every way to write `reading` as one word: put the reading into
+    /// session `id` (a spare one) as it is, convert, and widen the first
+    /// segment until it covers the whole reading. The session is left
+    /// converting; pick with `select_candidate` + `submit`.
+    pub fn alternatives(&self, id: u64, reading: &str, preceding: &str) -> Option<JaView> {
+        self.revert(id);
+        let k = cmd::KeyEvent {
+            activated: Some(true),
+            mode: Some(cmd::CompositionMode::Hiragana as i32),
+            key_string: Some(reading.to_string()),
+            ..Default::default()
+        };
+        let mut input = Self::input(In::SendKey, id);
+        input.key = Some(k);
+        if !preceding.is_empty() {
+            input.context = Some(cmd::Context { preceding_text: Some(preceding.to_string()), ..Default::default() });
+        }
+        let v = self.eval(input).map(|o| view(&o))?;
+        if std::env::var_os("EARTHDESK_IME_TRACE").is_some() {
+            eprintln!("  alternatives({reading}): {v:?}");
+        }
+        if v.preedit.is_empty() {
+            return None;
+        }
+        let mut v = self.send_key(id, JaKey::Special(cmd::key_event::SpecialKey::Space), false, preceding)?;
+        for _ in 0..12 {
+            if v.segments <= 1 {
+                break;
+            }
+            v = self.send_key(id, JaKey::Special(cmd::key_event::SpecialKey::Right), true, preceding)?;
+        }
+        // Right after the first Space Mozc has no window yet, only the list.
+        v.converting = true;
+        (!v.candidates.is_empty()).then_some(v)
+    }
+
     fn command(&self, id: u64, t: Sc, cand: Option<i32>) -> Option<JaView> {
         let mut input = Self::input(In::SendCommand, id);
         input.command = Some(cmd::SessionCommand { r#type: t as i32, id: cand, ..Default::default() });

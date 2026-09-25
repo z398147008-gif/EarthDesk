@@ -4,10 +4,10 @@
 //! "/" commands (/zh /ja /mix):
 //!
 //!   Mixed  the same letters go to both engines; mixed.rs decides which
-//!          side's candidates lead. Space picks the highlighted candidate,
-//!          except when Japanese leads: then Space converts the way a
-//!          Japanese input method does (Mozc takes over this composition:
-//!          segments, ←→, Space for the next candidate, Enter to commit).
+//!          side's candidates lead. The list is a row: ←→ move the
+//!          highlight, ↑↓ turn the page, Space puts the highlighted one in.
+//!          On a Japanese candidate ↑↓ open its other spellings instead, in
+//!          a column (↑↓ move there, ←→ turn its pages, Esc closes it).
 //!   Zh     Rime alone (IME-1 behaviour).
 //!   Ja     Mozc alone, native Japanese input.
 //!
@@ -91,6 +91,18 @@ pub struct Comp {
     hl: usize,
     /// Japanese leads (decides Space, Enter, '-').
     ja_leads: bool,
+    /// An English word leads (the underline shows the letters as typed).
+    en_leads: bool,
+    /// ↑↓ on a Japanese candidate: its other spellings, in a column.
+    expand: Option<Expand>,
+}
+
+/// A Japanese word's other spellings (converted in the spare Mozc session).
+#[derive(Debug, Clone, Default)]
+pub struct Expand {
+    view: JaView,
+    hl: usize,
+    reading: String,
 }
 
 impl Comp {
@@ -194,6 +206,25 @@ fn to_jakey(code: u32) -> Option<JaKey> {
     })
 }
 
+/// Move a highlight over `n` candidates shown `ps` to a page: `step` ±1
+/// moves by one, ±ps turns the page keeping the place on it (no turning
+/// past the first or last page).
+fn step_hl(hl: usize, n: usize, ps: usize, step: i64) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    if step.unsigned_abs() as usize >= ps && ps > 0 {
+        let page = hl / ps;
+        let pages = n.div_ceil(ps);
+        let to = if step < 0 { page.checked_sub(1) } else { Some(page + 1).filter(|p| *p < pages) };
+        return match to {
+            Some(p) => (p * ps + hl % ps).min(n - 1),
+            None => hl,
+        };
+    }
+    (hl as i64 + step).clamp(0, n as i64 - 1) as usize
+}
+
 fn has_han(s: &str) -> bool {
     s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c) || ('\u{3400}'..='\u{4dbf}').contains(&c))
 }
@@ -216,7 +247,7 @@ fn chain(first: State, then: State) -> State {
         (Some(a), Some(b)) => Some(a + &b),
         (a, b) => a.or(b),
     };
-    State { eaten: true, commit, preedit: then.preedit, ascii: then.ascii, delete_before: first.delete_before }
+    State { eaten: true, commit, preedit: then.preedit, ascii: then.ascii, delete_before: first.delete_before, cands: None }
 }
 
 impl Engine {
@@ -230,17 +261,52 @@ impl Engine {
                 s.last_ja = None;
             }
             Lang::Ja => s.last = Some(Lang::Ja),
+            Lang::En => {
+                s.last = Some(Lang::En);
+                s.last_ja = None;
+            }
         }
         if !code.is_empty() && s.mode == crate::compose::Mode::Mixed {
             if let Ok(mut p) = self.pref.lock() {
                 p.record(code, lang);
             }
         }
+        // The sentence so far (its punctuation follows what it is mostly
+        // written in, not just the last word).
+        match lang {
+            Lang::Zh => s.sentence[0] += text.chars().filter(|c| has_han(&c.to_string())).count() as u32,
+            Lang::Ja => s.sentence[1] += text.chars().filter(|c| !c.is_ascii_punctuation() && !"、。「」？！・".contains(*c)).count() as u32,
+            Lang::En => s.sentence[2] += text.chars().any(|c| c.is_ascii_alphanumeric()) as u32,
+        }
+        if text.chars().last().map(|c| "。！？.!?\n".contains(c)).unwrap_or(false) {
+            s.sentence = [0; 3];
+        }
         s.recent.push_str(text);
         let n = s.recent.chars().count();
         if n > 24 {
             s.recent = s.recent.chars().skip(n - 24).collect();
         }
+    }
+
+    /// The language of the sentence being typed: Japanese if most of it is
+    /// Japanese, Chinese if it has Chinese in it, English if it is all
+    /// English; the last word's language when nothing is typed yet.
+    fn sentence_lang(&self, s: &Sess) -> Option<Lang> {
+        let [zh, ja, en] = s.sentence;
+        if ja > zh {
+            Some(Lang::Ja)
+        } else if zh > 0 {
+            Some(Lang::Zh)
+        } else if en > 0 {
+            Some(Lang::En)
+        } else {
+            s.last
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn bench_committed(&self, s: &mut Sess, text: &str, lang: Lang) {
+        self.committed(s, text, lang, "");
     }
 
     fn rime_ascii(&self, s: &mut Sess) -> bool {
@@ -261,6 +327,23 @@ impl Engine {
         }
         let text = if self.mozc.is_none() { "中文（日语引擎没有安装）" } else { mode.label() };
         (eaten_with(None), self.flash(session, text))
+    }
+
+    /// The letters of the composition as they were typed (a "/" command,
+    /// the Mixed / Japanese composition, or Rime's).
+    fn typed_so_far(&self, s: &mut Sess) -> String {
+        if let Some(c) = &s.cmd {
+            return format!("/{c}");
+        }
+        if let Some(c) = &s.comp {
+            let code = c.code();
+            if !code.is_empty() {
+                return code;
+            }
+            return c.ja_view.preedit.clone();
+        }
+        let rs = self.rime_session(s);
+        self.rime.raw_input(rs)
     }
 
     fn clear_comp(&self, s: &mut Sess) {
@@ -291,6 +374,35 @@ impl Engine {
         }
 
         let idle = s.comp.is_none() && s.cmd.is_none() && !self.rime.snapshot(self.rime_session(s)).composing;
+
+        // Caps Lock: capitals, typed straight into the program. Pressed in
+        // the middle of a word, what was typed so far goes in as it is.
+        if code == ks::CAPS_LOCK {
+            if up || idle {
+                return (pass(), UiOut::Keep);
+            }
+            let typed = self.typed_so_far(s);
+            self.clear_comp(s);
+            if !typed.is_empty() {
+                self.committed(s, &typed, Lang::En, "");
+            }
+            return (State { eaten: false, commit: (!typed.is_empty()).then_some(typed), ..Default::default() }, UiOut::Hide);
+        }
+        if m & mask::LOCK != 0 && !ctrl_alt && char::from_u32(code).map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+            if up {
+                return (pass(), UiOut::Keep);
+            }
+            if idle {
+                if let Some(c) = char::from_u32(code) {
+                    let t = c.to_string();
+                    self.committed(s, &t, Lang::En, "");
+                }
+                return (pass(), UiOut::Hide);
+            }
+        }
+        if plain && idle && (code == ks::RETURN || code == ks::KP_ENTER) {
+            s.sentence = [0; 3];
+        }
 
         // ` right after a Japanese word: switch its spelling.
         if plain && code == '`' as u32 && idle {
@@ -337,6 +449,32 @@ impl Engine {
 
     fn zh_key(&self, s: &mut Sess, session: u64, code: u32, m: u32) -> (State, UiOut) {
         let rs = self.rime_session(s);
+        // The list is a row: ←→ move the highlight, ↑↓ turn the page (not
+        // the caret in the spelling).
+        let code = if matches!(code, ks::LEFT | ks::RIGHT | ks::UP | ks::DOWN) && m & (mask::CONTROL | mask::ALT | mask::SHIFT) == 0 && self.rime.snapshot(rs).composing {
+            match code {
+                ks::LEFT => ks::UP,
+                ks::RIGHT => ks::DOWN,
+                ks::UP => ks::PAGE_UP,
+                _ => ks::PAGE_DOWN,
+            }
+        } else {
+            code
+        };
+        // The keypad types digits and signs as they are: finish what is being
+        // composed (first candidate), then let the key through.
+        if ks::is_keypad(code) && m & mask::RELEASE == 0 {
+            let mut commit = None;
+            if self.rime.snapshot(rs).composing {
+                self.rime.process_key(rs, 0x20, 0);
+                commit = self.rime.snapshot(rs).commit.filter(|c| !c.is_empty());
+                if let Some(c) = &commit {
+                    self.committed(s, c, Lang::Zh, "");
+                }
+                self.rime.clear(rs);
+            }
+            return (State { eaten: false, commit, ..Default::default() }, UiOut::Hide);
+        }
         let eaten = self.rime.process_key(rs, code, m);
         let snap = self.rime.snapshot(rs);
         if let Some(c) = snap.commit.clone().filter(|c| !c.is_empty()) {
@@ -462,10 +600,57 @@ impl Engine {
         let mz = self.mozc.as_ref().unwrap();
         let ps = self.page_size();
 
+        let converting = s.comp.as_ref().map(|c| c.ja_view.converting).unwrap_or(false);
+        let n = s.comp.as_ref().map(|c| c.ja_view.candidates.len()).unwrap_or(0);
+        if composing && !ctrl_alt {
+            // The list is a row: ←→ move the highlight, ↑↓ turn the page;
+            // Space puts the highlighted one in.
+            let step: i64 = match code {
+                ks::LEFT => -1,
+                ks::RIGHT | ks::TAB => 1,
+                ks::UP | ks::PAGE_UP => -(ps as i64),
+                ks::DOWN | ks::PAGE_DOWN => ps as i64,
+                _ => 0,
+            };
+            if step != 0 {
+                if converting {
+                    // Mozc moves its focus one by one: a page is ps steps.
+                    let k = if step < 0 { Sk::Up } else { Sk::Down };
+                    let focus = s.comp.as_ref().and_then(|c| c.ja_view.focused).unwrap_or(0) as i64;
+                    let target = if step.abs() > 1 { (((focus + step) / ps as i64) * ps as i64).clamp(0, n.max(1) as i64 - 1) } else { focus + step };
+                    let times = if step.abs() > 1 { (target - focus).unsigned_abs() as usize } else { 1 };
+                    let mut v = None;
+                    for _ in 0..times.max(1) {
+                        v = mz.send_key(mid, JaKey::Special(k), false, &s.recent);
+                        if v.is_none() {
+                            break;
+                        }
+                    }
+                    return self.native_done(s, session, v);
+                }
+                if let Some(c) = s.comp.as_mut() {
+                    c.hl = step_hl(c.hl, n, ps, step);
+                }
+                let c = s.comp.as_ref().unwrap();
+                return (eaten_with(self.native_preedit(&c.ja_view)), self.ja_list_view(session, &c.ja_view, c.hl));
+            }
+            if code == 0x20 && m & mask::SHIFT == 0 {
+                let v = if converting {
+                    mz.submit(mid)
+                } else {
+                    match s.comp.as_ref().and_then(|c| c.ja_view.candidates.get(c.hl).map(|x| x.id)) {
+                        Some(id) => mz.submit_candidate(mid, id),
+                        None => mz.submit(mid),
+                    }
+                };
+                return self.native_done(s, session, v);
+            }
+        }
+
         // Digits pick from our page of the list.
         if !ctrl_alt && (('1' as u32)..=('9' as u32)).contains(&code) {
             if let Some(c) = s.comp.as_ref().filter(|c| !c.ja_view.candidates.is_empty()) {
-                let page = c.ja_view.focused.unwrap_or(0) / ps;
+                let page = if c.ja_view.converting { c.ja_view.focused.unwrap_or(0) } else { c.hl } / ps;
                 let i = page * ps + (code - '1' as u32) as usize;
                 if let Some(cand) = c.ja_view.candidates.get(i) {
                     let id = cand.id;
@@ -519,19 +704,22 @@ impl Engine {
             return (st, UiOut::Hide);
         }
         st.preedit = self.native_preedit(&v);
-        let ui = self.ja_list_view(session, &v);
+        let ui = self.ja_list_view(session, &v, 0);
         if let Some(c) = s.comp.as_mut() {
+            c.hl = 0;
             c.ja_view = v;
         }
         (st, ui)
     }
 
-    fn ja_list_view(&self, session: u64, v: &JaView) -> UiOut {
+    /// `hl`: our highlight in the suggestion list (Mozc's own focus is used
+    /// while it converts, after F6-F10).
+    fn ja_list_view(&self, session: u64, v: &JaView, hl: usize) -> UiOut {
         if v.candidates.is_empty() {
             return UiOut::Hide;
         }
         let ps = self.page_size();
-        let focus = v.focused.unwrap_or(0).min(v.candidates.len() - 1);
+        let focus = if v.converting { v.focused.unwrap_or(0) } else { hl }.min(v.candidates.len() - 1);
         let page = focus / ps;
         let items: Vec<(String, String)> = v.candidates.iter().skip(page * ps).take(ps).map(|c| (c.value.clone(), c.description.clone())).collect();
         UiOut::Show(View {
@@ -539,10 +727,11 @@ impl Engine {
             preedit: v.reading.clone(),
             labels: (1..=items.len()).map(|i| i.to_string()).collect(),
             candidates: items,
-            highlighted: if v.focused.is_some() { (focus - page * ps) as i32 } else { 0 },
+            highlighted: (focus - page * ps) as i32,
             page_no: page as i32,
             last_page: (page + 1) * ps >= v.candidates.len(),
             flash: false,
+            vertical: false,
         })
     }
 
@@ -565,10 +754,26 @@ impl Engine {
                     }
                 }
             } else {
-                if plain && !rime_busy && s.last == Some(Lang::Ja) && !self.rime_ascii(s) {
+                // Punctuation follows the sentence being typed: 、。 in a
+                // Japanese one, , . in an English one, ，。 (Rime) in a
+                // Chinese one even right after an English word in it.
+                let sentence = self.sentence_lang(s);
+                if plain && !rime_busy && sentence == Some(Lang::Ja) && !self.rime_ascii(s) {
                     if let Some(p) = ja_punct(code) {
                         self.committed(s, p, Lang::Ja, "");
                         return (State { eaten: true, commit: Some(p.into()), ..Default::default() }, UiOut::Hide);
+                    }
+                }
+                // Right after an English word Space is a space.
+                if plain && !rime_busy && code == 0x20 && s.last == Some(Lang::En) && !self.rime_ascii(s) {
+                    self.committed(s, " ", Lang::En, "");
+                    return (State { eaten: true, commit: Some(" ".into()), ..Default::default() }, UiOut::Hide);
+                }
+                if plain && !rime_busy && sentence == Some(Lang::En) && !self.rime_ascii(s) {
+                    if let Some(p) = char::from_u32(code).filter(|c| ",.?!;:'\"".contains(*c)) {
+                        let p = p.to_string();
+                        self.committed(s, &p, Lang::En, "");
+                        return (State { eaten: true, commit: Some(p), ..Default::default() }, UiOut::Hide);
                     }
                 }
                 return self.zh_key(s, session, code, m);
@@ -594,12 +799,21 @@ impl Engine {
             return (eaten_with(self.mixed_preedit(s)), UiOut::Keep);
         }
         if ctrl_alt {
-            return (eaten_with(self.mixed_preedit(s)), UiOut::Keep);
+            // Ctrl+V, Ctrl+A ... mean the program's command, not typing:
+            // drop the unfinished letters and let the key through.
+            self.clear_comp(s);
+            return (State { eaten: false, ..Default::default() }, UiOut::Hide);
         }
 
         let ps = self.page_size();
+        if s.comp.as_ref().map(|c| c.expand.is_some()).unwrap_or(false) {
+            if let Some(r) = self.expand_key(s, session, code) {
+                return r;
+            }
+        }
         let ch = char::from_u32(code);
         let ja_leads = s.comp.as_ref().map(|c| c.ja_leads).unwrap_or(false);
+        let hl_ja = s.comp.as_ref().and_then(|c| c.merged.get(c.hl)).map(|m| m.lang == Lang::Ja).unwrap_or(false);
         match code {
             c if (('a' as u32)..=('z' as u32)).contains(&c) => self.push(s, session, ch.unwrap(), Route::Both),
             c if (('A' as u32)..=('Z' as u32)).contains(&c) => {
@@ -613,8 +827,30 @@ impl Engine {
             c if c == '-' as u32 && ja_leads => self.push(s, session, '-', Route::Ja),
             c if c == '-' as u32 || c == ks::PAGE_UP => self.move_hl(s, session, -(ps as i64), true),
             c if c == '=' as u32 || c == ks::PAGE_DOWN => self.move_hl(s, session, ps as i64, true),
-            ks::UP | ks::LEFT => self.move_hl(s, session, -1, false),
-            ks::DOWN | ks::RIGHT | ks::TAB => self.move_hl(s, session, 1, false),
+            // The list is a row: ←→ move the highlight, ↑↓ turn the page —
+            // or, on a Japanese word, open its other spellings below it.
+            ks::UP | ks::DOWN if hl_ja => self.expand_ja(s, session, code == ks::UP),
+            ks::UP => self.move_hl(s, session, -(ps as i64), true),
+            ks::DOWN => self.move_hl(s, session, ps as i64, true),
+            ks::LEFT => self.move_hl(s, session, -1, false),
+            ks::RIGHT | ks::TAB => self.move_hl(s, session, 1, false),
+            c if ks::is_keypad(c) => {
+                // The keypad types digits and signs, never picks: put the
+                // highlighted candidate in, then let the key through.
+                let hl = s.comp.as_ref().map(|c| c.hl).unwrap_or(0);
+                let has = s.comp.as_ref().map(|c| !c.merged.is_empty()).unwrap_or(false);
+                let mut st = if has {
+                    self.pick_merged(s, session, hl).0
+                } else {
+                    let text = s.comp.as_ref().map(|c| c.code()).unwrap_or_default();
+                    self.clear_comp(s);
+                    State { eaten: true, commit: Some(text), ..Default::default() }
+                };
+                if s.comp.is_none() {
+                    st.eaten = false;
+                }
+                (st, UiOut::Hide)
+            }
             ks::BACKSPACE => {
                 if let Some(c) = s.comp.as_mut() {
                     c.keys.pop();
@@ -646,9 +882,8 @@ impl Engine {
                     self.clear_comp(s);
                     return (State { eaten: true, commit: Some(text), ..Default::default() }, UiOut::Hide);
                 }
-                if c.ja_leads && c.ja && c.hl == 0 {
-                    return self.hand_to_mozc(s, session, JaKey::Special(Sk::Space), false);
-                }
+                // Space puts in the highlighted candidate, whatever its
+                // language (←→↑↓ move the highlight).
                 self.pick_merged(s, session, c.hl)
             }
             c if (ks::F1 + 5..=ks::F1 + 9).contains(&c) && s.comp.as_ref().map(|c| c.ja).unwrap_or(false) => {
@@ -745,14 +980,8 @@ impl Engine {
     fn move_hl(&self, s: &mut Sess, session: u64, by: i64, page: bool) -> (State, UiOut) {
         let ps = self.page_size() as i64;
         if let Some(c) = s.comp.as_mut() {
-            let n = c.merged.len() as i64;
-            if n > 0 {
-                let mut h = c.hl as i64 + by;
-                if page {
-                    h = (h / ps) * ps;
-                }
-                c.hl = h.clamp(0, n - 1) as usize;
-            }
+            let _ = page;
+            c.hl = step_hl(c.hl, c.merged.len(), ps as usize, by);
         }
         (eaten_with(self.mixed_preedit(s)), self.mixed_view(s, session))
     }
@@ -761,6 +990,7 @@ impl Engine {
     fn refresh(&self, s: &mut Sess, session: u64) -> (State, UiOut) {
         let rs = self.rime_session(s);
         let last = s.last;
+        let s_recent = s.recent.clone();
         let code = s.comp.as_ref().map(|c| c.code()).unwrap_or_default();
         let (zp, jp) = self.pref.lock().map(|p| p.get(&code)).unwrap_or((0, 0));
         let Some(comp) = s.comp.as_mut() else { return (eaten_with(None), UiOut::Hide) };
@@ -788,7 +1018,19 @@ impl Engine {
         // best two so they do not crowd out the Chinese words.
         let ja_all: &[mozc::JaCand] = if comp.ja { &comp.ja_view.candidates } else { &[] };
         let ja_cands = if jinfo.complete { ja_all } else { &ja_all[..ja_all.len().min(2)] };
-        comp.merged = mixed::merge(&zh_cands, ja_cands, sz, sj);
+        let zh_wins = sz.unwrap_or(f32::MIN) >= sj.unwrap_or(f32::MIN);
+        let loser_real = if zh_wins { jinfo.hit } else { zinfo.whole >= 1 && !zinfo.partial };
+        comp.merged = mixed::merge_with(&zh_cands, ja_cands, sz, sj, loser_real);
+        // English: the letters as typed, if they are an English word.
+        let words = if comp.keys.iter().all(|k| k.0.is_ascii_alphabetic()) { self.en.lookup(&code, mixed::sentence_start(&s_recent)) } else { Vec::new() };
+        if let Some(se) = mixed::en_score(&code, !words.is_empty(), last) {
+            let best = match (sz, sj) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (a, b) => a.or(b),
+            };
+            mixed::insert_english(&mut comp.merged, &words, se, best);
+        }
+        comp.en_leads = comp.merged.first().map(|m| m.lang == Lang::En).unwrap_or(false);
         comp.ja_leads = match comp.merged.first() {
             Some(m) => m.lang == Lang::Ja,
             None => matches!((sz, sj), (None, Some(_))) || matches!((sz, sj), (Some(a), Some(b)) if b > a),
@@ -800,7 +1042,14 @@ impl Engine {
     /// The underlined text in the program: the leading side's spelling.
     fn mixed_preedit(&self, s: &Sess) -> Option<Preedit> {
         let c = s.comp.as_ref()?;
-        let text = if c.ja_leads && c.ja && !c.ja_view.preedit.is_empty() {
+        if let Some(e) = &c.expand {
+            if let Some(x) = e.view.candidates.get(e.hl) {
+                return preedit_end(&x.value);
+            }
+        }
+        let text = if c.en_leads {
+            c.code()
+        } else if c.ja_leads && c.ja && !c.ja_view.preedit.is_empty() {
             c.ja_view.preedit.clone()
         } else if c.zh && !c.zh_pre.is_empty() {
             c.zh_pre.clone()
@@ -828,7 +1077,137 @@ impl Engine {
             page_no: page as i32,
             last_page: (page + 1) * ps >= c.merged.len(),
             flash: false,
+            vertical: false,
         })
+    }
+
+    /// ↑↓ on a Japanese candidate: list its other spellings in a column.
+    fn expand_ja(&self, s: &mut Sess, session: u64, from_below: bool) -> (State, UiOut) {
+        let keep = |e: &Engine, s: &Sess| (eaten_with(e.mixed_preedit(s)), UiOut::Keep);
+        let Some(c) = s.comp.as_ref() else { return keep(self, s) };
+        let Some(item) = c.merged.get(c.hl).cloned() else { return keep(self, s) };
+        let reading = c
+            .ja_view
+            .candidates
+            .iter()
+            .find(|x| x.id as i64 == item.key)
+            .map(|x| x.key.clone())
+            .filter(|k| !k.is_empty())
+            .unwrap_or_else(|| c.ja_view.reading.clone());
+        let recent = s.recent.clone();
+        let (Some(mz), Some(aux)) = (self.mozc.as_ref(), self.mozc_aux(s)) else { return keep(self, s) };
+        let Some(v) = mz.alternatives(aux, &reading, &recent) else { return keep(self, s) };
+        // Start on the word itself (↓ then goes on to the next spelling).
+        let at = v.candidates.iter().position(|x| x.value == item.text);
+        let hl = match at {
+            Some(i) => i,
+            None if from_below => v.candidates.len().saturating_sub(1),
+            None => 0,
+        };
+        if let Some(c) = s.comp.as_mut() {
+            c.expand = Some(Expand { view: v, hl, reading });
+        }
+        (eaten_with(self.mixed_preedit(s)), self.expand_view(s, session))
+    }
+
+    fn expand_view(&self, s: &Sess, session: u64) -> UiOut {
+        let Some(e) = s.comp.as_ref().and_then(|c| c.expand.as_ref()) else { return UiOut::Hide };
+        let ps = self.page_size();
+        let n = e.view.candidates.len();
+        let page = e.hl / ps;
+        let items: Vec<(String, String)> = e.view.candidates.iter().skip(page * ps).take(ps).map(|c| (c.value.clone(), c.description.clone())).collect();
+        UiOut::Show(View {
+            session,
+            preedit: e.reading.clone(),
+            labels: (1..=items.len()).map(|i| i.to_string()).collect(),
+            candidates: items,
+            highlighted: (e.hl - page * ps) as i32,
+            page_no: page as i32,
+            last_page: (page + 1) * ps >= n,
+            flash: false,
+            vertical: true,
+        })
+    }
+
+    /// A key while a word's other spellings are open: ↑↓ move (↑ off the top
+    /// closes the column), ←→ turn the page, Space / Enter / a digit put one
+    /// in, Esc / Backspace close it. Anything else closes it and is then
+    /// handled as usual (None).
+    fn expand_key(&self, s: &mut Sess, session: u64, code: u32) -> Option<(State, UiOut)> {
+        let ps = self.page_size();
+        let e = s.comp.as_ref()?.expand.as_ref()?;
+        let n = e.view.candidates.len();
+        let hl = e.hl;
+        let page = hl / ps;
+        let set = |s: &mut Sess, h: usize| {
+            if let Some(e) = s.comp.as_mut().and_then(|c| c.expand.as_mut()) {
+                e.hl = h;
+            }
+        };
+        let close = |e: &Engine, s: &mut Sess| {
+            if let Some(c) = s.comp.as_mut() {
+                c.expand = None;
+            }
+            (eaten_with(e.mixed_preedit(s)), e.mixed_view(s, session))
+        };
+        let moved = |e: &Engine, s: &Sess| Some((eaten_with(e.mixed_preedit(s)), e.expand_view(s, session)));
+        match code {
+            ks::UP => {
+                if hl == 0 {
+                    return Some(close(self, s));
+                }
+                set(s, hl - 1);
+                moved(self, s)
+            }
+            ks::DOWN | ks::TAB => {
+                set(s, (hl + 1).min(n.saturating_sub(1)));
+                moved(self, s)
+            }
+            c if c == ks::LEFT || c == ks::PAGE_UP || c == '-' as u32 => {
+                set(s, step_hl(hl, n, ps, -(ps as i64)));
+                moved(self, s)
+            }
+            c if c == ks::RIGHT || c == ks::PAGE_DOWN || c == '=' as u32 => {
+                set(s, step_hl(hl, n, ps, ps as i64));
+                moved(self, s)
+            }
+            0x20 | ks::RETURN | ks::KP_ENTER => Some(self.pick_expanded(s, session, hl)),
+            c if (('1' as u32)..=('9' as u32)).contains(&c) => {
+                let i = page * ps + (c - '1' as u32) as usize;
+                if i < n {
+                    Some(self.pick_expanded(s, session, i))
+                } else {
+                    moved(self, s)
+                }
+            }
+            ks::ESCAPE | ks::BACKSPACE => Some(close(self, s)),
+            _ => {
+                if let Some(c) = s.comp.as_mut() {
+                    c.expand = None;
+                }
+                None
+            }
+        }
+    }
+
+    /// Put in spelling `i` of the open column; the composition is done.
+    fn pick_expanded(&self, s: &mut Sess, session: u64, i: usize) -> (State, UiOut) {
+        let Some(c) = s.comp.clone() else { return (eaten_with(None), UiOut::Hide) };
+        let Some(e) = c.expand.as_ref() else { return (eaten_with(None), UiOut::Hide) };
+        let Some(cand) = e.view.candidates.get(i).cloned() else { return (eaten_with(self.mixed_preedit(s)), self.expand_view(s, session)) };
+        let mut text = cand.value.clone();
+        if let (Some(mz), true) = (self.mozc.as_ref(), s.mozc_aux != 0) {
+            // Through Mozc, so it learns the choice.
+            let _ = mz.select_candidate(s.mozc_aux, cand.id);
+            if let Some((t, _)) = mz.submit(s.mozc_aux).and_then(|v| v.commit) {
+                text = t;
+            }
+        }
+        let code = c.code();
+        self.clear_comp(s);
+        self.committed(s, &text, Lang::Ja, &code);
+        s.last_ja = Some(LastJa { text: text.clone(), reading: e.reading.clone(), shown: 0 });
+        (State { eaten: true, commit: Some(text), ..Default::default() }, UiOut::Hide)
     }
 
     /// Space (or F6-F10) while Japanese leads: Mozc converts from here on.
@@ -866,6 +1245,11 @@ impl Engine {
                 // Partly picked ("你 hao"): the rest continues in Rime alone.
                 (self.to_state(true, &snap), self.rime_ui(session, &snap))
             }
+            Lang::En => {
+                self.clear_comp(s);
+                self.committed(s, &item.text, Lang::En, &code);
+                (State { eaten: true, commit: Some(item.text), ..Default::default() }, UiOut::Hide)
+            }
             Lang::Ja => {
                 if s.rime != 0 {
                     self.rime.clear(s.rime);
@@ -885,6 +1269,14 @@ impl Engine {
         let ps = self.page_size();
         match s.comp.as_ref().map(|c| c.native) {
             // Mixed composition.
+            Some(false) if s.comp.as_ref().map(|c| c.expand.is_some()).unwrap_or(false) => {
+                if let Some(back) = page {
+                    let (st, ui) = self.expand_key(s, session, if back { ks::PAGE_UP } else { ks::PAGE_DOWN }).unwrap_or((eaten_with(None), UiOut::Keep));
+                    return (st, ui);
+                }
+                let hl = s.comp.as_ref().and_then(|c| c.expand.as_ref()).map(|e| e.hl).unwrap_or(0);
+                self.pick_expanded(s, session, (hl / ps) * ps + index.unwrap_or(0))
+            }
             Some(false) => {
                 if let Some(back) = page {
                     return self.move_hl(s, session, if back { -(ps as i64) } else { ps as i64 }, true);

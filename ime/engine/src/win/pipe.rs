@@ -99,9 +99,20 @@ fn security() -> Option<(SECURITY_ATTRIBUTES, PSECURITY_DESCRIPTOR)> {
 fn serve_client(mut pipe: Pipe, engine: Arc<Engine>) {
     let mut sessions: Vec<u64> = Vec::new();
     loop {
-        let req: Request = match read_frame(&mut pipe) {
+        // A request we do not know (a newer DLL than this engine) gets an
+        // error reply, not a closed pipe: the DLL then falls back.
+        let raw: serde_json::Value = match read_frame(&mut pipe) {
             Ok(r) => r,
             Err(_) => break,
+        };
+        let req: Request = match serde_json::from_value(raw) {
+            Ok(r) => r,
+            Err(e) => {
+                if write_frame(&mut pipe, &Reply::Error { message: format!("unknown request: {e}") }).is_err() {
+                    break;
+                }
+                continue;
+            }
         };
         let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.handle(req.clone())))
             .unwrap_or_else(|_| Reply::Error { message: "engine panicked".into() });

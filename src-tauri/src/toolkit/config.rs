@@ -511,6 +511,23 @@ impl ToolkitConfig {
 
     /// The gesture rule to run for `gesture` over `exe`: rules that name the
     /// program beat global ones, and among equals the first in the list wins.
+    /// Like `gesture_rule`, but when the direction string names no rule,
+    /// the rule whose shape is closest to the stroke (see gesture.rs).
+    pub fn gesture_rule_for(&self, gesture: &str, points: &[(f64, f64)], exe: &str) -> Option<&GestureRule> {
+        if let Some(r) = self.gesture_rule(gesture, exe) {
+            return Some(r);
+        }
+        let usable: Vec<&str> = self
+            .gestures
+            .rules
+            .iter()
+            .filter(|r| r.enabled && !r.gesture.is_empty() && r.scope.rank(exe).is_some())
+            .map(|r| r.gesture.as_str())
+            .collect();
+        let g = crate::toolkit::gesture::best_shape(points, usable.into_iter())?;
+        self.gesture_rule(g, exe)
+    }
+
     pub fn gesture_rule(&self, gesture: &str, exe: &str) -> Option<&GestureRule> {
         self.gestures
             .rules
