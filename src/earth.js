@@ -623,7 +623,7 @@ void main() {
       // Measured at 22:39 on the iPad: north China (51,41,25), south China
       // (26,30,21), Sea of Japan (15,26,34) -- a clearly visible, moonlit
       // earth, not a black disc.
-      vec3 moonlit = mix(mix(dayCol, vec3(dot(dayCol, vec3(0.3, 0.5, 0.2))), 0.35) * vec3(0.24, 0.24, 0.20) + vec3(0.020, 0.017, 0.011), dayCol * vec3(0.16, 0.19, 0.20) + vec3(0.016, 0.020, 0.026), water);
+      vec3 moonlit = mix(mix(dayCol, vec3(dot(dayCol, vec3(0.3, 0.5, 0.2))), 0.10) * vec3(0.24, 0.20, 0.12) + vec3(0.014, 0.011, 0.004), dayCol * vec3(0.10, 0.12, 0.14) + vec3(0.006, 0.012, 0.022), water);
       // Street lights come on in the dusk, not across the wide soft terminator
       // the ground uses -- otherwise cities glow white in the afternoon.
       float dark = 1.0 - smoothstep(-0.10, 0.03, ndl);
@@ -815,6 +815,13 @@ void main() {
     // grey-blue; through the twilight arc it loses its blue and goes a
     // neutral pale grey (long grazing paths redden the light).
     vec3 pale = mix(vec3(0.78, 0.76, 0.72), vec3(0.60, 0.70, 0.82), blue);
+    // v20: on the night side the reference's ring is a steel blue at its
+    // peak (measured (104,124,140), iPad 2026-09-26 00:08) and turns a clear
+    // teal-blue with almost no red as it fades out ((17,44,59), then
+    // (2,26,36)). Our grey came from pulling the scattered light to the
+    // twilight grey all the way round the night side.
+    float nightK = 1.0 - smoothstep(-0.22, 0.02, sunward);
+    pale = mix(pale, vec3(0.66, 0.80, 0.92), nightK);
     // Outer glow: a cool steel blue fading to black on the day side, turning
     // the same neutral grey where the sun is near the horizon.
     float wIn = uLimbIn;                          // radii
@@ -823,7 +830,7 @@ void main() {
     // used to -- in the reference you can still read coastlines a pixel or
     // two from the silhouette, and only the very last sliver goes to haze.
     float inner = exp(-max(-hL, 0.0) / (wIn * 0.85));
-    surface = mix(surface, pale * (0.72 + 0.28 * lit), min(inner * 1.3, 1.0) * 0.55 * mix(0.35, 1.0, lit));
+    surface = mix(surface, pale * (0.72 + 0.28 * lit), min(inner * 1.3, 1.0) * 0.55 * mix(0.35, 1.0, lit) * (1.0 - 0.5 * nightK));
     // Anti-aliased silhouette: a couple of pixels, never less.
     float aa = 1.0 - smoothstep(-1.5 * px, 1.5 * px, hL);
     coverage = max(min(coverage, aa), 0.0);
@@ -853,8 +860,23 @@ void main() {
     // Long grazing paths redden the scattered light; the reference keeps the
     // edge a cool blue-white, so pull it toward the haze colour there.
     float aL = dot(additive, vec3(0.2126, 0.7152, 0.0722));
-    additive = mix(additive, aL * pale / dot(pale, vec3(0.2126, 0.7152, 0.0722)), exp(-max(-hL, 0.0) / (2.5 * wIn)));
+    // At night the tint runs from the steel-blue peak out to teal.
+    vec3 tint = mix(pale, mix(vec3(0.40, 0.76, 1.00), vec3(0.06, 0.72, 1.00), smoothstep(wIn * 2.0, wOut * 1.6, o)),
+                    smoothstep(0.0, wIn * 1.2, o) * nightK);
+    additive = mix(additive, aL * tint / dot(tint, vec3(0.2126, 0.7152, 0.0722)), exp(-max(-hL, 0.0) / (2.5 * wIn)));
     additive += glow * mix(0.10, 1.0, lit) * (1.0 - coverage);
+    // v20: the night ring as a whole -- scattered light and painted glow
+    // together -- takes the reference's colours: steel blue at the peak,
+    // teal-blue with almost no red further out, a little brighter than ours.
+    {
+      float lA = dot(additive, vec3(0.2126, 0.7152, 0.0722));
+      vec3 nt = mix(vec3(0.70, 0.86, 1.00), vec3(0.30, 0.72, 1.00), smoothstep(wIn * 0.6, wIn * 2.2, o));
+      nt = mix(nt, vec3(0.04, 0.70, 1.00), smoothstep(wIn * 2.0, wIn * 5.0, o));
+      float k = nightK * smoothstep(-wIn * 3.5, 0.0, hL);
+      // The reference's tail also ends sooner: black by ~4 band widths out.
+      float tail = 1.0 - 0.75 * smoothstep(wIn * 2.5, wIn * 6.5, o);
+      additive = mix(additive, lA * 1.15 * tail * nt / dot(nt, vec3(0.2126, 0.7152, 0.0722)), k);
+    }
   }
   vec3 color = surface * coverage + additive;
   color += (hash21(gl_FragCoord.xy) - 0.5) / 255.0;
