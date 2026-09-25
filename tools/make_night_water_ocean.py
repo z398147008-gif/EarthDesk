@@ -8,6 +8,9 @@
                       floor and the night side is black where nobody lives.
   earth_water.jpg     8192x4096 sea mask from GEBCO (elevation == 0), plus
                       inland lakes taken from the old 2048 mask away from coasts.
+                      SUPERSEDED: GEBCO's 8-bit PNG steps ~25 m, so every low
+                      plain came out as sea. Run make_water_mask.py after this
+                      script to write the real (Natural Earth) mask over it.
   earth_day_calm.jpg  earth_day.jpg with the sea-floor relief removed: deep
                       ocean an even navy, only continental shelves lighter.
 Run from tools/; reads and writes ../src/textures/.

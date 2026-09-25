@@ -2,8 +2,9 @@
 Apple's Earth wallpaper / Maps satellite look.
 
     python make_day_apple.py   (needs numpy, scipy, pillow; ~6 GB RAM)
-Run make_night_water_ocean.py first (it downloads gebco.png and writes the
-8K water mask this script reads).
+Run make_water_mask.py first (the 8K water mask this script reads), and
+have gebco.png from make_night_water_ocean.py. Then run make_ocean_apple.py
+on the result to lay the depth-coloured sea over it.
 
 Land: +4% saturation, arid ground pushed toward ochre, a little yellow in the
 greens, local contrast ("clarity"), and ambient occlusion from GEBCO elevation

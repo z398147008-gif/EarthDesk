@@ -6,7 +6,8 @@
 
 | 东西 | 来源 | 许可 |
 | --- | --- | --- |
-| 昼面 / 夜灯 / 云 / 水体掩膜 | NASA Visible Earth — Blue Marble Next Generation、Black Marble | 公有领域,要求注明 NASA |
+| 昼面 / 夜灯 / 云 | NASA Visible Earth — Blue Marble Next Generation、Black Marble | 公有领域,要求注明 NASA |
+| 水体掩膜(海岸线、湖泊) | Natural Earth 1:10m physical(land、lakes、minor islands) | 公有领域 |
 | 海底地形(用于海水配色与法线图) | NASA Visible Earth — GEBCO 8 bathymetry/topography | 同上 |
 | 银河背景 | NASA SVS 4851 "Deep Star Maps 2020"(E. T. Wright) | 公有领域,注明 NASA/Goddard |
 | 月面图 | NASA LRO / CGI Moon Kit | 公有领域 |

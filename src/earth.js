@@ -478,7 +478,7 @@ void main() {
       // are a smeared fill that turns into a pinwheel on a globe. Sample it
       // much softer up there.
       float polar = smoothstep(0.90, 0.985, abs(n.y));
-      float blurK = mix(1.3, 16.0, polar);
+      float blurK = mix(1.9, 16.0, polar);   // v20: soft enough to hide the map's pixels
       // Cloud tops stand up to 14 km above the ground (G channel of the map,
       // from Himawari's infrared). Parallax: a tall cloud is seen displaced
       // toward the horizon, so near the limb towers lean over the ground
@@ -558,7 +558,9 @@ void main() {
       // v20: the reference's decks are translucent gauze almost everywhere --
       // the ground reads through the frontal band -- and only storm cores go
       // solid.
-      float stormCore = smoothstep(0.80, 0.97, body) * smoothstep(0.55, 0.85, cTop);
+      // Dense middles go solid white whatever their height; only the edges
+      // are gauze. That falloff -- opaque core, feathered rim -- is the look.
+      float stormCore = smoothstep(0.60, 1.0, body) * 0.9;
       float bodyA = pow(body, 1.20) * mix(0.52, 0.78, thick);
       bodyA = mix(bodyA, max(bodyA, 0.95 * body), stormCore);
       // A thin veil wherever the map has any cloud at all: cirrus and haze
@@ -673,7 +675,7 @@ void main() {
       vec2 qS = textureGrad(uClouds, cuv + dN * 6.0, ddx * bc, ddy * bc).rg;
       float gE = qE.r * 0.6 + qE.g, gW = qW.r * 0.6 + qW.g;
       float gN = qN.r * 0.6 + qN.g, gS = qS.r * 0.6 + qS.g;
-      float bumpK = mix(1.6, 3.0, smoothstep(0.25, 0.7, cTop)) * (1.0 - 0.85 * limbFlat);
+      float bumpK = mix(2.8, 4.6, smoothstep(0.25, 0.7, cTop)) * (1.0 - 0.85 * limbFlat);
       vec3 cN3 = normalize(n - bumpK * ((fE - fW) * east + (fN - fS) * north)
                              - 0.7 * (1.0 - 0.85 * limbFlat) * ((gE - gW) * east + (gN - gS) * north));
       // Cavities: where this spot is thinner than its surroundings it sits
@@ -722,7 +724,14 @@ void main() {
       // v19: not a neutral grey-white -- measured on the reference, cloud a
       // few pixels from the limb is a blue-grey (0.70 : 0.90 : 1.0), the
       // colour of the air in front of it, and no brighter than the sea's haze.
-      cloudCol = mix(cloudCol, vec3(0.66, 0.82, 0.96) * mix(0.55, 1.0, day), limbFlat * 0.85);
+      cloudCol = mix(cloudCol, vec3(0.66, 0.82, 0.96) * mix(0.55, 1.0, day), limbFlat * 0.55);
+      // v20: rolls and lobes inside a deck. The reference's bands are never
+      // an even white: bright billows with grey troughs between them, even
+      // where the deck is solid -- and they keep that structure well toward
+      // the limb, so this goes on after the limb flattening.
+      float lobes = fbm(q * 0.45 + warp * 1.5 + 3.0) * 0.65 + det * 0.35;
+      cloudCol *= mix(1.0, mix(0.60, 1.10, smoothstep(0.28, 0.72, lobes)),
+                      smoothstep(0.35, 0.85, body) * day * (1.0 - 0.6 * limbFade));
       // At night clouds are only a faint grey hint, as in the reference.
       surface = mix(surface, cloudCol * cloudLight, cloud * mix(0.40, 1.0, day));
       // Cities light the underside of the cloud deck above them.
@@ -775,6 +784,17 @@ void main() {
         vec3 tG = pow(atmoT, vec3(1.0 / 2.2));
         tG = mix(tG, vec3(dot(tG, vec3(0.2126, 0.7152, 0.0722))), 0.75);
         surface = surface * mix(vec3(1.0), tG, uAtmoExtinction);
+        // v20: measured on the reference, open sea away from the centre of
+        // the disc sits under a lighter blue-grey air than the physics gives
+        // us ((66,103,126) near the top where we had (49,71,106)); the land
+        // already reads hazy enough.
+        float seaAir = water * (1.0 - cloud) * airDay * pow(1.0 - mu, 1.4);
+        surface = mix(surface, vec3(0.29, 0.45, 0.52), seaAir * 0.55);
+        // Land sits under the same air: the reference's ground is a hazier,
+        // bluer version of ours (south China (89,110,85) where we had
+        // (70,95,44)) -- about a quarter of a pale blue-grey laid over it.
+        float landAir = (1.0 - water) * (1.0 - cloud) * airDay;
+        surface = mix(surface, vec3(0.55, 0.62, 0.72), landAir * 0.24);
       }
 
       // v19: the reference lets the last stretch of ground sink into a

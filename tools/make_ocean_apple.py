@@ -35,9 +35,11 @@ depthC=blur(depth,4.0)
 # Read off Apple's Earth: turquoise right at the coast, a clear cyan-blue
 # shelf, then a saturated ocean blue that keeps its colour into the abyss --
 # no grey, and no olive sediment smearing the coastline into the sea.
-stops=[(0,(68,141,160)),(20,(52,120,152)),(60,(43,104,144)),(150,(36,92,137)),
-       (400,(31,80,130)),(1000,(28,71,123)),(2500,(24,62,114)),(4500,(21,55,106)),
-       (8000,(19,49,97))]
+# v20: re-measured against the reference (iPad, 2026-09-23 15:02) pixel by
+# pixel on clear sea: the old ramp came out ~1.6x too blue in open water and
+# ~1.5x too bright on the shelves. Apple's sea is a darker, greyer navy with
+# a teal shelf.
+stops=[(0,(49,96,98)),(20,(37,82,92)),(60,(32,71,88)),(150,(31,66,83)),(400,(32,60,78)),(1000,(33,56,74)),(2500,(29,48,69)),(4500,(25,43,64)),(8000,(23,38,58))]
 ds=np.array([x for x,_ in stops],np.float32); cs=np.array([srgb(c) for _,c in stops],np.float32)
 # sea-floor relief, weighted toward the shallows
 bz=blur(bath,2.0); gx=np.roll(bz,-1,1)-np.roll(bz,1,1); gy=np.roll(bz,-1,0)-np.roll(bz,1,0); del bz,bath
