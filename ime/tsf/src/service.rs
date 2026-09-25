@@ -42,6 +42,8 @@ pub struct TextService {
     composition: Shared,
     /// The context the current composition lives in (for notifications).
     context: RefCell<Option<ITfContext>>,
+    /// Our composition's text after the program ended it (edit::Orphan).
+    orphan: RefCell<Option<edit::Orphan>>,
     /// Interfaces to ourselves, set right after creation.
     me: RefCell<Option<IUnknown>>,
 }
@@ -63,6 +65,7 @@ impl TextService {
             client: Rc::new(RefCell::new(Client::new(0, false))),
             composition: Rc::new(RefCell::new(None)),
             context: RefCell::new(None),
+            orphan: RefCell::new(None),
             me: RefCell::new(None),
         });
         let unknown: IUnknown = object.to_interface();
@@ -147,6 +150,10 @@ impl TextService {
     }
 
     fn apply(&self, context: &ITfContext, state: &State, sync: bool) {
+        self.apply_adopting(context, state, sync, None)
+    }
+
+    fn apply_adopting(&self, context: &ITfContext, state: &State, sync: bool, adopt: Option<ITfRange>) {
         let Some(sink) = self.sink() else { return };
         let client = self.client.clone();
         let on_caret: edit::OnCaret = Rc::new(move |rc: RECT| {
@@ -155,7 +162,7 @@ impl TextService {
                 c.tell(|session| Request::Caret { session, x: rc.left, y: rc.top, h: (rc.bottom - rc.top).max(1) });
             }
         });
-        if let Some(note) = edit::apply(self.tid.get(), context, &sink, &self.composition, state, self.attr.get(), sync, on_caret) {
+        if let Some(note) = edit::apply(self.tid.get(), context, &sink, &self.composition, state, self.attr.get(), sync, on_caret, adopt) {
             if let Ok(mut c) = self.client.try_borrow_mut() {
                 c.tell(|session| Request::Note { session, message: note.clone() });
             }
@@ -220,6 +227,20 @@ impl TextService {
         if !composing_now && unsafe { windows::Win32::UI::WindowsAndMessaging::GetMessageExtraInfo() }.0 as usize == ime_proto::INJECTED {
             return false;
         }
+        // The program cut our composition off since the last key: carry on
+        // over its text if the caret is still right after it, else start
+        // afresh.
+        let mut adopt = None;
+        if !up {
+            let orphan = self.orphan.borrow_mut().take();
+            if let Some(o) = orphan {
+                if context.map(|ctx| edit::still_here(self.tid.get(), ctx, &o)).unwrap_or(false) {
+                    adopt = Some(o.range);
+                } else if let Ok(mut c) = self.client.try_borrow_mut() {
+                    c.tell(|session| Request::Reset { session });
+                }
+            }
+        }
         let state = {
             let Ok(mut c) = self.client.try_borrow_mut() else { return false };
             let (vk, scan, flags, hkl) = keys::raw(wp.0 as u16, lp.0, up);
@@ -236,10 +257,10 @@ impl TextService {
                 }
             }
         };
-        let composing = self.composition.try_borrow().map(|c| c.is_some()).unwrap_or(false);
+        let composing = self.composition.try_borrow().map(|c| c.is_some()).unwrap_or(false) || adopt.is_some();
         if let Some(ctx) = context {
             if state.commit.is_some() || state.preedit.is_some() || composing {
-                self.apply(ctx, &state, true);
+                self.apply_adopting(ctx, &state, true, adopt);
             }
         }
         // After the edit, so the window opens where the text now is.
@@ -249,6 +270,7 @@ impl TextService {
 
     fn reset(&self) {
         candwin::hide();
+        *self.orphan.borrow_mut() = None;
         if let Ok(mut c) = self.client.try_borrow_mut() {
             c.tell(|session| Request::Reset { session });
         }
@@ -406,15 +428,27 @@ impl ITfThreadMgrEventSink_Impl for TextService_Impl {
 }
 
 impl ITfCompositionSink_Impl for TextService_Impl {
-    fn OnCompositionTerminated(&self, _ec: u32, _pcomposition: windows_core::Ref<'_, ITfComposition>) -> Result<()> {
+    fn OnCompositionTerminated(&self, ec: u32, pcomposition: windows_core::Ref<'_, ITfComposition>) -> Result<()> {
         guard(Ok(()), || {
-            // The program ended our composition (clicked elsewhere, for
-            // example): forget it and tell the engine.
+            // The program ended our composition. Some do it on their own in
+            // the middle of a word (web apps re-rendering the text box
+            // after Enter), which would leave the spelling in the text
+            // ("ran后" for 然后): keep what was cut off, and let the next
+            // key decide (Orphan). The candidate window goes meanwhile.
             if let Ok(mut c) = self.composition.try_borrow_mut() {
                 *c = None;
             }
+            let orphan = pcomposition.as_ref().and_then(|comp| unsafe { edit::Orphan::take(ec, comp) });
+            candwin::hide();
             if let Ok(mut c) = self.client.try_borrow_mut() {
-                c.tell(|session| Request::Reset { session });
+                if orphan.is_some() {
+                    c.tell(|session| Request::Focus { session, on: false });
+                } else {
+                    c.tell(|session| Request::Reset { session });
+                }
+            }
+            if let Ok(mut o) = self.orphan.try_borrow_mut() {
+                *o = orphan;
             }
             Ok(())
         })

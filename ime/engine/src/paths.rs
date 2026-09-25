@@ -69,6 +69,11 @@ pub fn settings_path() -> PathBuf {
     base().join("settings.json")
 }
 
+/// The weather EarthDesk last fetched (for the weather skin).
+pub fn weather_path() -> PathBuf {
+    base().join("weather.json")
+}
+
 pub fn load_settings() -> ime_proto::Settings {
     std::fs::read(settings_path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }

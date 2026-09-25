@@ -11,12 +11,15 @@
 //!   ni hao                                 <- spelling, small and grey
 //!   [1 你好]  2 拟好  3 你  4 尼 ...   < >  <- candidates, first highlighted
 //!
-//! Colours follow the system light / dark app theme.
+//! Colours follow the system light / dark app theme, or a skin (see
+//! `ime_proto::Skin`): "time" tints the window by the time of day (always
+//! light), "weather" paints the coming hours' sky along the bar, now at the
+//! left — the longer the bar, the further ahead it looks.
 
 #![cfg(windows)]
 
 pub use ime_proto::Cands;
-use windows::core::{w, PCWSTR};
+use windows::core::{w, Interface, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
@@ -73,6 +76,7 @@ fn color(hex: u32, a: f32) -> D2D1_COLOR_F {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Palette {
     bg: D2D1_COLOR_F,
     border: D2D1_COLOR_F,
@@ -104,6 +108,137 @@ fn palette(dark: bool) -> Palette {
             hl_text: color(0xffffff, 1.0),
             label: color(0x8e8e93, 1.0),
         }
+    }
+}
+
+fn mix(a: D2D1_COLOR_F, b: D2D1_COLOR_F, t: f32) -> D2D1_COLOR_F {
+    let t = t.clamp(0.0, 1.0);
+    D2D1_COLOR_F { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t, a: a.a + (b.a - a.a) * t }
+}
+
+/// A light palette over a tinted background (the skins never go dark).
+fn skinned(accent: D2D1_COLOR_F) -> Palette {
+    Palette {
+        bg: color(0xffffff, 0.98),
+        border: color(0x000000, 0.08),
+        text: color(0x1c1c1e, 1.0),
+        dim: color(0x5c626d, 1.0),
+        hl_bg: accent,
+        hl_text: color(0xffffff, 1.0),
+        label: color(0x6b717c, 1.0),
+    }
+}
+
+/// The local time of day in hours (13.5 = half past one).
+fn local_hour() -> f32 {
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    t.wHour as f32 + t.wMinute as f32 / 60.0
+}
+
+/// The time skin through the day: (hour, left, right, accent). Dawn is
+/// peach, the morning fresh blue, noon a bright warm white, the afternoon
+/// amber, dusk coral into lavender, the night a pale periwinkle.
+const DAY: &[(f32, u32, u32, u32)] = &[
+    (0.0, 0xe4e6f6, 0xdde2f3, 0x5a67d0),
+    (4.5, 0xe6e4f4, 0xe9e0ef, 0x6c62c8),
+    (6.0, 0xfbe3e6, 0xfdeedd, 0xdb6b86),
+    (8.0, 0xfff4e2, 0xe3f1fc, 0x2f8fe0),
+    (10.5, 0xe4f3ff, 0xe8f8ef, 0x1f8be6),
+    (13.0, 0xfffae6, 0xeef6ff, 0xe39419),
+    (15.5, 0xfff0d9, 0xfde6d2, 0xe07f22),
+    (18.0, 0xfde0d6, 0xebdef5, 0xd9604f),
+    (19.5, 0xebdef6, 0xe0e3f8, 0x8565d2),
+    (22.0, 0xe4e5f7, 0xdde2f3, 0x5a67d0),
+    (24.0, 0xe4e6f6, 0xdde2f3, 0x5a67d0),
+];
+
+fn time_colors(hour: f32) -> (D2D1_COLOR_F, D2D1_COLOR_F, D2D1_COLOR_F) {
+    let h = hour.rem_euclid(24.0);
+    let i = DAY.windows(2).position(|w| h >= w[0].0 && h < w[1].0).unwrap_or(0);
+    let (a, b) = (DAY[i], DAY[i + 1]);
+    let t = (h - a.0) / (b.0 - a.0);
+    // Ease, so each colour holds a while and moves on gently.
+    let t = t * t * (3.0 - 2.0 * t);
+    (mix(color(a.1, 0.98), color(b.1, 0.98), t), mix(color(a.2, 0.98), color(b.2, 0.98), t), mix(color(a.3, 1.0), color(b.3, 1.0), t))
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Sky {
+    Clear,
+    Partly,
+    Cloudy,
+    Fog,
+    Drizzle,
+    Rain,
+    Snow,
+    Thunder,
+}
+
+fn sky(code: u8) -> Sky {
+    match code {
+        0 | 1 => Sky::Clear,
+        2 => Sky::Partly,
+        3 => Sky::Cloudy,
+        45 | 48 => Sky::Fog,
+        51..=57 => Sky::Drizzle,
+        61..=67 | 80..=82 => Sky::Rain,
+        71..=77 | 85 | 86 => Sky::Snow,
+        95..=99 => Sky::Thunder,
+        _ => Sky::Cloudy,
+    }
+}
+
+/// Background and highlight for a kind of sky (by day / by night).
+fn sky_colors(k: Sky, day: bool) -> (D2D1_COLOR_F, D2D1_COLOR_F) {
+    let (bg, accent) = match (k, day) {
+        (Sky::Clear, true) => (0xd5ebff, 0x2d89e3),
+        (Sky::Clear, false) => (0xe2e0f6, 0x6760d2),
+        (Sky::Partly, true) => (0xdcebf9, 0x3a84cf),
+        (Sky::Partly, false) => (0xe0e0f1, 0x6461c4),
+        (Sky::Cloudy, true) => (0xe2e7ee, 0x5b7897),
+        (Sky::Cloudy, false) => (0xdddfea, 0x5f6690),
+        (Sky::Fog, _) => (0xe8eaed, 0x6f7d8a),
+        (Sky::Drizzle, _) => (0xdbe5ef, 0x3f74aa),
+        (Sky::Rain, _) => (0xd2ddea, 0x376aa3),
+        (Sky::Snow, _) => (0xebf1f8, 0x5a8bc0),
+        (Sky::Thunder, _) => (0xdbd8e8, 0x6556b0),
+    };
+    (color(bg, 0.98), color(accent, 1.0))
+}
+
+/// The same scatter every time (so the rain does not jump as you type).
+fn hash(i: u32) -> f32 {
+    let mut x = i.wrapping_mul(0x9E37_79B9) ^ 0x85EB_CA6B;
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x2C1B_3C6D);
+    x ^= x >> 12;
+    (x & 0xffff) as f32 / 65535.0
+}
+
+/// How the window is painted.
+struct Look {
+    pal: Palette,
+    /// Background colours left to right (position 0..1); empty = plain.
+    stops: Vec<(f32, D2D1_COLOR_F)>,
+    /// Weather along the bar, now first.
+    hours: Vec<(Sky, bool)>,
+    corner: String,
+}
+
+fn look(skin: &ime_proto::Skin) -> Look {
+    match skin.kind.as_str() {
+        "time" => {
+            let (l, r, accent) = time_colors(local_hour());
+            Look { pal: skinned(accent), stops: vec![(0.0, l), (1.0, r)], hours: Vec::new(), corner: String::new() }
+        }
+        "weather" if !skin.hours.is_empty() => {
+            let hours: Vec<(Sky, bool)> = skin.hours.iter().map(|&(c, d)| (sky(c), d)).collect();
+            let (_, accent) = sky_colors(hours[0].0, hours[0].1);
+            Look { pal: skinned(accent), stops: Vec::new(), hours, corner: skin.label.clone() }
+        }
+        // No weather known yet: the time of day stands in.
+        "weather" => look(&ime_proto::Skin { kind: "time".into(), ..Default::default() }),
+        _ => Look { pal: palette(dark_theme()), stops: Vec::new(), hours: Vec::new(), corner: String::new() },
     }
 }
 
@@ -305,14 +440,21 @@ impl Canvas {
             log("candidate window: no text format");
             return;
         };
-        let pal = palette(dark_theme());
+        let lk = look(&view.skin);
+        let pal = lk.pal;
 
-        // Measure.
+        // Measure. The first line: the letters as typed (when they read
+        // differently), the reading, and the weather in the corner.
         let pad = 8.0 * s;
         let gap = 14.0 * s;
         let vgap = 6.0 * s;
+        let typed = if view.typed.is_empty() { None } else { self.layout(&view.typed, &flabel) };
+        let typed_w = typed.as_ref().map(|t| t.1 + 7.0 * s).unwrap_or(0.0);
         let pre = self.layout(&view.preedit, &fsmall);
-        let pre_h = pre.as_ref().map(|p| p.2).unwrap_or(0.0);
+        let corner = if lk.corner.is_empty() { None } else { self.layout(&lk.corner, &fsmall) };
+        let corner_w = corner.as_ref().map(|c| c.1 + 16.0 * s).unwrap_or(0.0);
+        let head_w = typed_w + pre.as_ref().map(|p| p.1).unwrap_or(0.0) + corner_w;
+        let pre_h = pre.as_ref().map(|p| p.2).unwrap_or(0.0).max(typed.as_ref().map(|t| t.2).unwrap_or(0.0));
         let row_y = pad + pre_h + 3.0 * s;
         let mut row_h: f32 = 0.0;
         let mut measured = Vec::new();
@@ -336,14 +478,14 @@ impl Canvas {
                 y += row_h + vgap;
             }
             let arrows_y = y;
-            (col_w.max(arrows_w).max(pre.as_ref().map(|p| p.1).unwrap_or(0.0)), arrows_y + row_h, arrows_y)
+            (col_w.max(arrows_w).max(head_w), arrows_y + row_h, arrows_y)
         } else {
             let mut x = pad;
             for (w, l, t, c) in measured {
                 items.push((x, row_y, w, l, t, c));
                 x += w + gap;
             }
-            ((x - gap + arrows_w).max(pre.as_ref().map(|p| p.1 + pad).unwrap_or(0.0)), row_y + row_h, row_y)
+            ((x - gap + arrows_w).max(head_w + pad), row_y + row_h, row_y)
         };
         let width = (content_w + pad * 2.0).ceil() as i32;
         let height = (bottom + pad * 1.5).ceil() as i32;
@@ -371,8 +513,8 @@ impl Canvas {
             log(&format!("candidate window: BindDC {e}"));
             return;
         }
+        self.target.BeginDraw();
         let t = &self.target;
-        t.BeginDraw();
         t.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
         let ox = shadow as f32;
         let oy = shadow as f32;
@@ -398,12 +540,20 @@ impl Canvas {
         if let Ok(b) = t.CreateSolidColorBrush(&pal.bg, None) {
             t.FillRoundedRectangle(&card, &b);
         }
+        self.paint_skin(&lk, &card.rect, corner_w, s);
+        let t = &self.target;
         if let Ok(b) = t.CreateSolidColorBrush(&pal.border, None) {
             t.DrawRoundedRectangle(&card, &b, 1.0, None);
         }
         let brush = |c: &D2D1_COLOR_F| t.CreateSolidColorBrush(c, None).ok();
-        if let (Some((l, _, _)), Some(b)) = (&pre, brush(&pal.dim)) {
-            t.DrawTextLayout(Vector2 { X: ox + pad, Y: oy + pad }, l, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        if let (Some((l, _, lh)), Some(b)) = (&typed, brush(&pal.text)) {
+            t.DrawTextLayout(Vector2 { X: ox + pad, Y: oy + pad + (pre_h - lh) * 0.6 }, l, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        }
+        if let (Some((l, _, lh)), Some(b)) = (&pre, brush(&pal.dim)) {
+            t.DrawTextLayout(Vector2 { X: ox + pad + typed_w, Y: oy + pad + (pre_h - lh) * 0.6 }, l, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        }
+        if let (Some((l, lw, lh)), Some(b)) = (&corner, brush(&pal.dim)) {
+            t.DrawTextLayout(Vector2 { X: ox + width as f32 - pad - lw, Y: oy + pad + (pre_h - lh) * 0.6 }, l, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
         }
         let mut hits = HitMap::default();
         for (i, (x, y, iw, l, tx, c)) in items.iter().enumerate() {
@@ -487,6 +637,159 @@ impl Canvas {
             // Stay above the window being typed in, which may itself be
             // topmost.
             let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+    }
+}
+
+impl Canvas {
+    /// The skin's background and weather, clipped to the card.
+    /// `corner`: the width the weather label takes at the top right.
+    unsafe fn paint_skin(&self, lk: &Look, card: &D2D_RECT_F, corner: f32, s: f32) {
+        if lk.stops.is_empty() && lk.hours.is_empty() {
+            return;
+        }
+        let t = &self.target;
+        let w = card.right - card.left;
+        let h = card.bottom - card.top;
+        let r = D2D1_ROUNDED_RECT { rect: *card, radiusX: 10.0 * s, radiusY: 10.0 * s };
+        let Ok(geo) = self.factory.CreateRoundedRectangleGeometry(&r) else { return };
+        let Ok(geo) = geo.cast::<ID2D1Geometry>() else { return };
+        let Ok(layer) = t.CreateLayer(None) else { return };
+        let params = D2D1_LAYER_PARAMETERS {
+            contentBounds: *card,
+            geometricMask: std::mem::ManuallyDrop::new(Some(geo)),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: windows_numerics::Matrix3x2::identity(),
+            opacity: 1.0,
+            opacityBrush: std::mem::ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS_NONE,
+        };
+        t.PushLayer(&params, &layer);
+        let _ = std::mem::ManuallyDrop::into_inner(params.geometricMask);
+
+        // As many hours as fit, about 120 px each.
+        let n = if lk.hours.is_empty() { 0 } else { ((w / (120.0 * s)).floor() as usize).clamp(1, lk.hours.len()) };
+        let seg = if n > 0 { w / n as f32 } else { w };
+        let mut stops = lk.stops.clone();
+        if n > 0 {
+            stops.clear();
+            for (i, &(k, d)) in lk.hours.iter().take(n).enumerate() {
+                let c = sky_colors(k, d).0;
+                // Each hour holds its colour over most of its stretch and
+                // blends into the next at the border.
+                stops.push(((i as f32 + 0.2) / n as f32, c));
+                stops.push(((i as f32 + 0.8) / n as f32, c));
+            }
+        }
+        let gs: Vec<D2D1_GRADIENT_STOP> = stops.iter().map(|&(p, c)| D2D1_GRADIENT_STOP { position: p, color: c }).collect();
+        if let Ok(coll) = t.CreateGradientStopCollection(&gs, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP) {
+            let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: card.left, Y: 0.0 }, endPoint: Vector2 { X: card.right, Y: 0.0 } };
+            if let Ok(b) = t.CreateLinearGradientBrush(&props, None, &coll) {
+                t.FillRectangle(card, &b);
+            }
+        }
+        // A soft sheen from the top, so the tint reads as sky, not paint.
+        let sheen = [D2D1_GRADIENT_STOP { position: 0.0, color: color(0xffffff, 0.45) }, D2D1_GRADIENT_STOP { position: 1.0, color: color(0xffffff, 0.0) }];
+        if let Ok(coll) = t.CreateGradientStopCollection(&sheen, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP) {
+            let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: card.top }, endPoint: Vector2 { X: 0.0, Y: card.top + h * 0.7 } };
+            if let Ok(b) = t.CreateLinearGradientBrush(&props, None, &coll) {
+                t.FillRectangle(card, &b);
+            }
+        }
+        for (i, &(k, d)) in lk.hours.iter().take(n).enumerate() {
+            let x0 = card.left + seg * i as f32;
+            // The sun / moon keeps clear of the label.
+            let keep = (x0 + seg - (card.right - corner)).max(0.0);
+            self.paint_hour(k, d, D2D_RECT_F { left: x0, top: card.top, right: x0 + seg, bottom: card.bottom }, keep, i as u32, s);
+        }
+        t.PopLayer();
+    }
+
+    /// One hour's weather in its stretch of the bar. Kept faint: the
+    /// candidates are read over it.
+    unsafe fn paint_hour(&self, k: Sky, day: bool, r: D2D_RECT_F, keep: f32, seed: u32, s: f32) {
+        let t = &self.target;
+        let w = r.right - r.left;
+        let h = r.bottom - r.top;
+        let fill = |c: D2D1_COLOR_F, x: f32, y: f32, rx: f32, ry: f32| {
+            if let Ok(b) = t.CreateSolidColorBrush(&c, None) {
+                t.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: rx, radiusY: ry }, &b);
+            }
+        };
+        let line = |c: D2D1_COLOR_F, a: (f32, f32), b: (f32, f32), width: f32| {
+            if let Ok(br) = t.CreateSolidColorBrush(&c, None) {
+                t.DrawLine(Vector2 { X: a.0, Y: a.1 }, Vector2 { X: b.0, Y: b.1 }, &br, width, None);
+            }
+        };
+        let bg = sky_colors(k, day).0;
+        // Sun or moon, top right of the stretch.
+        let (cx, cy) = ((r.right - keep - 22.0 * s).max(r.left + 16.0 * s), r.top + 16.0 * s);
+        let body = matches!(k, Sky::Clear | Sky::Partly);
+        if body && day {
+            fill(color(0xffc53d, 0.12), cx, cy, 17.0 * s, 17.0 * s);
+            fill(color(0xffc53d, 0.18), cx, cy, 12.0 * s, 12.0 * s);
+            fill(color(0xffc53d, 0.55), cx, cy, 7.5 * s, 7.5 * s);
+        } else if body {
+            fill(color(0xf4d27a, 0.25), cx, cy, 12.0 * s, 12.0 * s);
+            fill(color(0xf1cf6e, 0.75), cx, cy, 7.0 * s, 7.0 * s);
+            fill(bg, cx + 3.6 * s, cy - 2.4 * s, 6.2 * s, 6.2 * s);
+            for j in 0..4u32 {
+                let sx = r.left + w * (0.12 + 0.7 * hash(seed * 31 + j * 7));
+                let sy = r.top + h * (0.15 + 0.7 * hash(seed * 17 + j * 13 + 1));
+                fill(color(0x8d8fd8, 0.35), sx, sy, 1.3 * s, 1.3 * s);
+            }
+        }
+        // Clouds.
+        let cloud = |x: f32, y: f32, z: f32, c: D2D1_COLOR_F| {
+            fill(color(0x8796a8, 0.10), x + 1.0 * s, y + 3.0 * s, 17.0 * z, 6.0 * z);
+            fill(c, x - 8.0 * z, y, 8.0 * z, 6.0 * z);
+            fill(c, x + 1.0 * z, y - 4.0 * z, 9.0 * z, 8.0 * z);
+            fill(c, x + 10.0 * z, y + 0.5 * z, 7.0 * z, 5.5 * z);
+            fill(c, x + 1.0 * z, y + 2.5 * z, 15.0 * z, 4.0 * z);
+        };
+        let white = color(0xffffff, 0.9);
+        let grey = color(0xf7f8fb, 0.85);
+        let mid = r.top + h * 0.46;
+        match k {
+            Sky::Partly => cloud(cx - 10.0 * s, cy + 9.0 * s, 1.1 * s, white),
+            Sky::Cloudy | Sky::Drizzle | Sky::Rain | Sky::Snow | Sky::Thunder => {
+                cloud(r.left + w * 0.28, mid, 1.35 * s, grey);
+                cloud(r.left + w * 0.74, mid - 5.0 * s, 1.1 * s, grey);
+            }
+            _ => {}
+        }
+        match k {
+            Sky::Fog => {
+                for j in 0..3 {
+                    let y = r.top + h * (0.35 + 0.22 * j as f32);
+                    let off = hash(seed * 5 + j) * w * 0.2;
+                    line(color(0xffffff, 0.7), (r.left + off, y), (r.right - w * 0.15 + off, y), 3.0 * s);
+                }
+            }
+            Sky::Drizzle | Sky::Rain | Sky::Thunder => {
+                let (count, len, a) = if k == Sky::Drizzle { (9, 4.0, 0.25) } else { (15, 7.0, 0.32) };
+                for j in 0..count {
+                    let x = r.left + w * hash(seed * 101 + j);
+                    let y = mid + 4.0 * s + (r.bottom - mid - 8.0 * s) * hash(seed * 67 + j * 3 + 2);
+                    line(color(0x4a73a3, a), (x, y), (x - 2.0 * s, y + len * s), 1.1 * s);
+                }
+                if k == Sky::Thunder {
+                    let (bx, by) = (r.left + w * 0.52, mid + 2.0 * s);
+                    let bolt = color(0xf2b705, 0.6);
+                    line(bolt, (bx, by), (bx - 4.0 * s, by + 9.0 * s), 1.8 * s);
+                    line(bolt, (bx - 4.0 * s, by + 9.0 * s), (bx + 1.0 * s, by + 9.0 * s), 1.8 * s);
+                    line(bolt, (bx + 1.0 * s, by + 9.0 * s), (bx - 3.0 * s, by + 18.0 * s), 1.8 * s);
+                }
+            }
+            Sky::Snow => {
+                for j in 0..12 {
+                    let x = r.left + w * hash(seed * 211 + j);
+                    let y = mid + 3.0 * s + (r.bottom - mid - 5.0 * s) * hash(seed * 89 + j * 5 + 4);
+                    let z = (1.1 + 0.9 * hash(seed * 7 + j)) * s;
+                    fill(color(0x8fa9c8, 0.4), x, y, z, z);
+                }
+            }
+            _ => {}
         }
     }
 }

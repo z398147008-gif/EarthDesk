@@ -732,6 +732,7 @@ impl Engine {
             last_page: (page + 1) * ps >= v.candidates.len(),
             flash: false,
             vertical: false,
+            ..Default::default()
         })
     }
 
@@ -1030,6 +1031,13 @@ impl Engine {
             };
             mixed::insert_english(&mut comp.merged, &words, se, best);
         }
+        // The letters themselves, last (first when nothing reads them):
+        // an English word the dictionary does not know ("claude") can be
+        // picked like any other, and the window never vanishes mid-word.
+        if comp.keys.iter().all(|k| k.0.is_ascii_alphabetic()) && !code.is_empty() && !comp.merged.iter().any(|m| m.text == code) {
+            let key = comp.merged.iter().filter(|m| m.lang == Lang::En).count() as i64;
+            comp.merged.push(mixed::Merged { lang: Lang::En, key, text: code.clone(), comment: "英".into() });
+        }
         comp.en_leads = comp.merged.first().map(|m| m.lang == Lang::En).unwrap_or(false);
         comp.ja_leads = match comp.merged.first() {
             Some(m) => m.lang == Lang::Ja,
@@ -1039,7 +1047,10 @@ impl Engine {
         (eaten_with(self.mixed_preedit(s)), self.mixed_view(s, session))
     }
 
-    /// The underlined text in the program: the leading side's spelling.
+    /// The underlined text in the program: what Enter would put in — the
+    /// kana when Japanese leads, otherwise the letters exactly as typed
+    /// (双拼 reads "rjhz" as "ran hou", but an English word must be seen
+    /// as it is spelled; the candidate window shows the reading).
     fn mixed_preedit(&self, s: &Sess) -> Option<Preedit> {
         let c = s.comp.as_ref()?;
         if let Some(e) = &c.expand {
@@ -1047,16 +1058,20 @@ impl Engine {
                 return preedit_end(&x.value);
             }
         }
-        let text = if c.en_leads {
-            c.code()
-        } else if c.ja_leads && c.ja && !c.ja_view.preedit.is_empty() {
+        let text = if !c.en_leads && c.ja_leads && c.ja && !c.ja_view.preedit.is_empty() { c.ja_view.preedit.clone() } else { c.code() };
+        preedit_end(&text)
+    }
+
+    /// The reading for the candidate window's first line: the leading
+    /// side's spelling ("ran hou", "わたし"), or the letters.
+    fn mixed_reading(&self, c: &Comp) -> String {
+        if !c.en_leads && c.ja_leads && c.ja && !c.ja_view.preedit.is_empty() {
             c.ja_view.preedit.clone()
-        } else if c.zh && !c.zh_pre.is_empty() {
+        } else if !c.en_leads && c.zh && !c.zh_pre.is_empty() {
             c.zh_pre.clone()
         } else {
             c.code()
-        };
-        preedit_end(&text)
+        }
     }
 
     fn mixed_view(&self, s: &Sess, session: u64) -> UiOut {
@@ -1067,10 +1082,9 @@ impl Engine {
         let ps = self.page_size();
         let page = c.hl / ps;
         let items: Vec<(String, String)> = c.merged.iter().skip(page * ps).take(ps).map(|m| (m.text.clone(), m.comment.clone())).collect();
-        let pre = self.mixed_preedit(s).map(|p| p.text).unwrap_or_default();
         UiOut::Show(View {
             session,
-            preedit: pre,
+            preedit: self.mixed_reading(c),
             labels: (1..=items.len()).map(|i| i.to_string()).collect(),
             candidates: items,
             highlighted: (c.hl - page * ps) as i32,
@@ -1078,6 +1092,8 @@ impl Engine {
             last_page: (page + 1) * ps >= c.merged.len(),
             flash: false,
             vertical: false,
+            typed: c.code(),
+            ..Default::default()
         })
     }
 
@@ -1126,6 +1142,7 @@ impl Engine {
             last_page: (page + 1) * ps >= n,
             flash: false,
             vertical: true,
+            ..Default::default()
         })
     }
 

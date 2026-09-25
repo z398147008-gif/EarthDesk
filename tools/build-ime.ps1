@@ -97,7 +97,8 @@ if ($ok32) {
 } elseif ($ok64) {
     Write-Host "  32 位输入法模块没编译成功:32 位的老程序里暂时用不了地球桌面输入法。" -ForegroundColor Yellow
 }
-Copy-Item (Join-Path $root "src-tauri\icons\icon.ico") (Join-Path $dest "ime.ico") -Force
+# 输入法图标（切换列表里的蓝底「中」），源文件是 src-tauri\icons\src\ime.svg
+Copy-Item (Join-Path $root "ime\ime.ico") (Join-Path $dest "ime.ico") -Force
 
 if ($ok64) {
     Write-Host "  [OK] 输入法" -ForegroundColor Green

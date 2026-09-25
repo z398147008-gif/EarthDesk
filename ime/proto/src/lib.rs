@@ -80,12 +80,91 @@ pub struct Settings {
     pub ascii_apps: Vec<String>,
     /// Chinese and Japanese from the same keys (needs the Japanese engine).
     pub mixed: bool,
+    /// The candidate window's look: "" follows the system's light / dark
+    /// theme, "weather" paints the coming hours' weather along the bar,
+    /// "time" tints it by the time of day. Applied without a redeploy.
+    pub skin: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { page_size: 7, emoji: false, shift_toggle: true, ascii_apps: Vec::new(), mixed: true }
+        Settings { page_size: 7, emoji: false, shift_toggle: true, ascii_apps: Vec::new(), mixed: true, skin: String::new() }
     }
+}
+
+impl Settings {
+    /// The same apart from the look (which needs no redeploy).
+    pub fn same_but_skin(&self, other: &Settings) -> bool {
+        Settings { skin: String::new(), ..self.clone() } == Settings { skin: String::new(), ..other.clone() }
+    }
+}
+
+/// The weather as EarthDesk last fetched it, written to
+/// `%APPDATA%\EarthDesk\ime\weather.json` for the weather skin.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Weather {
+    /// When it was fetched (Unix seconds).
+    pub at: u64,
+    /// Temperature now, °C.
+    pub temp: f32,
+    /// This hour and the ones after it: (WMO weather code, daytime).
+    pub hours: Vec<(u8, bool)>,
+}
+
+/// What a WMO weather code (as Open-Meteo reports it) is called.
+pub fn wmo_label(code: u8) -> &'static str {
+    match code {
+        0 => "晴",
+        1 => "晴间多云",
+        2 => "多云",
+        3 => "阴",
+        45 | 48 => "雾",
+        51..=55 => "毛毛雨",
+        56 | 57 | 66 | 67 => "冻雨",
+        61 => "小雨",
+        63 => "中雨",
+        65 => "大雨",
+        71 => "小雪",
+        73 => "中雪",
+        75 => "大雪",
+        77 => "米雪",
+        80 | 81 => "阵雨",
+        82 => "暴雨",
+        85 | 86 => "阵雪",
+        95..=99 => "雷阵雨",
+        _ => "",
+    }
+}
+
+impl Weather {
+    /// "18° 小雨" or, when it changes in the hours shown, "18° 小雨转晴".
+    pub fn label(&self, hours: usize) -> String {
+        let Some(&(now, _)) = self.hours.first() else { return String::new() };
+        let mut s = format!("{}° {}", self.temp.round() as i32, wmo_label(now));
+        let now_l = wmo_label(now);
+        if let Some(&(later, _)) = self.hours.iter().take(hours.max(1)).find(|h| wmo_label(h.0) != now_l) {
+            if !wmo_label(later).is_empty() {
+                s.push('转');
+                s.push_str(wmo_label(later));
+            }
+        }
+        s
+    }
+}
+
+/// How the candidate window looks (filled in by the engine from the
+/// settings and the weather file).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Skin {
+    /// "", "weather" or "time" (see `Settings::skin`).
+    pub kind: String,
+    /// Weather: this hour and the ones after it, left to right along the
+    /// bar: (WMO weather code, daytime). Empty = no weather known.
+    pub hours: Vec<(u8, bool)>,
+    /// Weather: the temperature and conditions, for the corner.
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -182,6 +261,16 @@ pub struct Cands {
     pub flash: bool,
     /// A column instead of a row (a Japanese word's other spellings).
     pub vertical: bool,
+    /// The letters as typed, shown before the spelling when it reads
+    /// differently ("rjhz" before "ran hou"); empty = the same.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub typed: String,
+    #[serde(default, skip_serializing_if = "skin_is_default")]
+    pub skin: Skin,
+}
+
+fn skin_is_default(s: &Skin) -> bool {
+    *s == Skin::default()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -308,6 +397,13 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"page_size":5}"#).unwrap();
         assert_eq!(s.page_size, 5);
         assert!(s.shift_toggle);
+        assert!(s.skin.is_empty());
+        let t = Settings { skin: "weather".into(), ..s.clone() };
+        assert!(t.same_but_skin(&s) && t != s);
+        assert!(!Settings { page_size: 6, ..s.clone() }.same_but_skin(&s));
+        let w = Weather { at: 1, temp: 17.6, hours: vec![(61, true), (61, true), (0, true)] };
+        assert_eq!(w.label(2), "18° 小雨");
+        assert_eq!(w.label(3), "18° 小雨转晴");
         assert_eq!(tip_string(), "0804:{6F1A7C52-3B8E-4D0A-9E61-2C5D8B7E4A13}{0B9D3E27-71C4-4F5E-8A2D-9C6E1F4B7D20}");
     }
 }

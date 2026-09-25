@@ -234,6 +234,10 @@ LibreHardwareMonitor 的库(LibreHardwareMonitorLib.dll,原样随附):
 
 - **微软双拼**，基于 [librime](https://github.com/rime/librime) 1.17（中州韵引擎）和 [雾凇拼音](https://github.com/iDvel/rime-ice) 的词库：候选按使用频率和最近使用排序、自动造词、整句输入；Shift 切中 / 英，`- =` 翻页，`[ ]` 以词定字，F4 菜单（简繁 / 全角 / Emoji）。
 - 按程序默认英文（游戏、终端…）、每页候选数、Emoji、快捷短语（`custom_phrase_double.txt`）在设置页里改。
+- 打字时文字里带下划线的是按下的字母（Enter 原样上屏），候选窗第一行是「字母 · 双拼读音」（`rjhz ran hou`）；词库里没有的英文词作为「英」排在候选最后，候选窗不会在打英文时消失。
+- 程序自己中途结束了组字（网页类程序换行后重绘输入框时会这样），留在文字里的拼写不会变成正文：光标还在它后面时下一个键接着组字（`tsf/src/edit.rs` 的 `Orphan`）。
+- **候选窗皮肤**（设置页「外观」，切换不需要重新部署）：跟随系统；**天气**——候选条从左到右画出现在和之后每小时的天气（晴、云、雨、雪、雾、雷），越长看得越远，角上是气温和「小雨转晴」，数据是地球桌面拉到的 Open-Meteo 天气（写到 `%APPDATA%\EarthDesk\ime\weather.json`）；**时段**——颜色随一天慢慢变（清晨桃粉、上午清蓝、正午暖白、下午琥珀、傍晚珊瑚到淡紫、夜里浅蓝紫），始终是浅色。
+- 图标：输入法是蓝底白「中」（`ime/ime.ico`），托盘是单独画的小地球（`src-tauri/icons/tray-*.png`），源文件都在 `src-tauri/icons/src/*.svg`。
 - **组成**：`ime/` 是独立的 Cargo 工作区，三个 crate ——
   - `proto`：DLL 和引擎之间的管道协议（长度前缀 + JSON）；
   - `tsf`：`EarthDeskTSF.dll`（64 位）/ `EarthDeskTSF32.dll`（32 位），TSF 文本服务，装进每个打字的程序里。它只转发按键、显示下划线的输入串、插入上屏文字，按键在 `OnTestKeyDown` 里就问完引擎（Weasel 的做法），每次调用 400 毫秒超时，引擎不在时按键原样交给程序；

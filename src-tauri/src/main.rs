@@ -619,6 +619,8 @@ fn spawn_weather_loop(app: AppHandle) {
                     if let Ok(mut slot) = app.state::<AppState>().weather.lock() {
                         *slot = Some(data.clone());
                     }
+                    // The input method's weather skin.
+                    ime::save_weather(&data);
                     let _ = app.emit("weather:update", data);
                     minutes * 60
                 }
@@ -1064,6 +1066,27 @@ fn spawn_widget_watchdog(app: AppHandle) {
     });
 }
 
+/// The tray's own small globe (the app icon is a photo of the earth, a
+/// smudge at 16 px), drawn at the size the taskbar uses at this scaling so
+/// Windows does not have to shrink it. Source: icons/src/tray.svg.
+fn tray_icon() -> Option<tauri::image::Image<'static>> {
+    #[cfg(windows)]
+    let dpi = unsafe { windows::Win32::UI::HiDpi::GetDpiForSystem() };
+    #[cfg(not(windows))]
+    let dpi = 96u32;
+    let want = (16 * dpi).div_ceil(96);
+    let sizes: [(u32, &'static [u8]); 6] = [
+        (16, include_bytes!("../icons/tray-16.png")),
+        (20, include_bytes!("../icons/tray-20.png")),
+        (24, include_bytes!("../icons/tray-24.png")),
+        (32, include_bytes!("../icons/tray-32.png")),
+        (40, include_bytes!("../icons/tray-40.png")),
+        (48, include_bytes!("../icons/tray-48.png")),
+    ];
+    let bytes = sizes.iter().find(|(s, _)| *s >= want).unwrap_or(&sizes[5]).1;
+    tauri::image::Image::from_bytes(bytes).ok()
+}
+
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
     use tauri::tray::TrayIconBuilder;
@@ -1085,7 +1108,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .tooltip("地球桌面")
         .menu(&menu);
 
-    if let Some(icon) = app.default_window_icon() {
+    if let Some(icon) = tray_icon() {
+        builder = builder.icon(icon);
+    } else if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }
 

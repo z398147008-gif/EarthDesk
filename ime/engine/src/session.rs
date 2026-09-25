@@ -37,6 +37,9 @@ pub struct View {
     pub flash: bool,
     /// A column instead of a row (a Japanese word's other spellings).
     pub vertical: bool,
+    /// The letters as typed, when the spelling reads differently.
+    pub typed: String,
+    pub skin: ime_proto::Skin,
 }
 
 impl View {
@@ -51,6 +54,8 @@ impl View {
             last_page: self.last_page,
             flash: self.flash,
             vertical: self.vertical,
+            typed: if self.typed == self.preedit { String::new() } else { self.typed.clone() },
+            skin: self.skin.clone(),
         }
     }
 }
@@ -119,6 +124,45 @@ pub struct Engine {
     pub(crate) pref: Mutex<LangPref>,
     pub(crate) modes: Mutex<ModeMemory>,
     pub(crate) en: crate::mixed::EnDict,
+    look: Mutex<Look>,
+}
+
+/// The candidate window's skin, re-read from settings.json and weather.json
+/// when they change (a skin switch needs no redeploy).
+#[derive(Default)]
+struct Look {
+    checked: Option<std::time::Instant>,
+    stamps: (Option<std::time::SystemTime>, Option<std::time::SystemTime>),
+    kind: Option<String>,
+    weather: Option<ime_proto::Weather>,
+    skin: ime_proto::Skin,
+}
+
+/// How many hours the weather skin paints along the bar (as many as fit).
+const SKIN_HOURS: usize = 8;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// The skin from the settings and the weather EarthDesk last saved. The
+/// weather is used while it is less than six hours old, from the hour it
+/// is now (the file may be a few hours behind).
+pub fn make_skin(kind: &str, weather: Option<&ime_proto::Weather>, now: u64) -> ime_proto::Skin {
+    let mut skin = ime_proto::Skin { kind: kind.to_string(), ..Default::default() };
+    if kind != "weather" {
+        return skin;
+    }
+    if let Some(w) = weather.filter(|w| w.at <= now + 600 && now.saturating_sub(w.at) < 6 * 3600) {
+        let late = (now.saturating_sub(w.at) / 3600) as usize;
+        let mut w = w.clone();
+        w.hours = w.hours.into_iter().skip(late).take(SKIN_HOURS).collect();
+        if !w.hours.is_empty() {
+            skin.label = w.label(SKIN_HOURS);
+            skin.hours = w.hours;
+        }
+    }
+    skin
 }
 
 /// Byte offset in UTF-8 -> offset in UTF-16 units.
@@ -129,6 +173,15 @@ pub fn utf16_index(s: &str, byte: usize) -> u32 {
         b -= 1;
     }
     s[..b].encode_utf16().count() as u32
+}
+
+/// Rime's input while nothing of it has been picked yet (only letters).
+fn typed_letters(snap: &Snapshot) -> Option<&str> {
+    let pre = &snap.preedit.as_ref()?.0;
+    let raw = snap.input.as_str();
+    let letters = !raw.is_empty() && raw.chars().all(|c| c.is_ascii_alphabetic() || c == '\'' || c == ';');
+    let picked = !pre.is_ascii();
+    (letters && !picked).then_some(raw)
 }
 
 impl Engine {
@@ -146,6 +199,38 @@ impl Engine {
             pref: Mutex::new(LangPref::load(&crate::paths::data_file("langpref.json"))),
             modes: Mutex::new(ModeMemory::load(&crate::paths::data_file("modes.json"))),
             en,
+            look: Mutex::new(Look::default()),
+        }
+    }
+
+    fn skin(&self) -> ime_proto::Skin {
+        let Ok(mut l) = self.look.lock() else { return Default::default() };
+        if l.checked.map(|t| t.elapsed() < std::time::Duration::from_secs(3)).unwrap_or(false) {
+            return l.skin.clone();
+        }
+        l.checked = Some(std::time::Instant::now());
+        let settings = crate::paths::settings_path();
+        let weather = crate::paths::weather_path();
+        let stamp = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        let stamps = (stamp(&settings), stamp(&weather));
+        if stamps != l.stamps || l.kind.is_none() {
+            l.stamps = stamps;
+            l.kind = Some(crate::paths::load_settings().skin);
+            l.weather = std::fs::read(&weather).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        }
+        // Derived again each time: the hour moves on.
+        l.skin = make_skin(l.kind.as_deref().unwrap_or(""), l.weather.as_ref(), now_secs());
+        l.skin.clone()
+    }
+
+    /// Put the current skin on a window about to be shown.
+    fn dress(&self, ui: UiOut) -> UiOut {
+        match ui {
+            UiOut::Show(mut v) => {
+                v.skin = self.skin();
+                UiOut::Show(v)
+            }
+            other => other,
         }
     }
 
@@ -205,10 +290,12 @@ impl Engine {
         State {
             eaten,
             commit: snap.commit.clone().filter(|c| !c.is_empty()),
-            preedit: snap
-                .preedit
-                .as_ref()
-                .map(|(text, cursor)| Preedit { text: text.clone(), cursor: utf16_index(text, *cursor) }),
+            preedit: snap.preedit.as_ref().map(|(text, cursor)| match typed_letters(snap) {
+                // Nothing picked yet: the letters as typed (what Enter puts
+                // in), the reading is in the candidate window.
+                Some(t) => Preedit { text: t.to_string(), cursor: t.encode_utf16().count() as u32 },
+                None => Preedit { text: text.clone(), cursor: utf16_index(text, *cursor) },
+            }),
             ascii: snap.ascii,
             delete_before: 0,
             cands: None,
@@ -227,6 +314,8 @@ impl Engine {
                 last_page: m.is_last_page,
                 flash: false,
                 vertical: false,
+                typed: typed_letters(snap).unwrap_or_default().to_string(),
+                ..Default::default()
             }),
             _ => UiOut::Hide,
         }
@@ -329,7 +418,7 @@ impl Engine {
                 }
                 let Some(s) = g.sessions.get_mut(&session) else { return Reply::Error { message: "no such session".into() } };
                 let (mut state, ui) = self.key(s, session, keycode, mask);
-                let (cands, ui) = Self::route(s.draws, ui);
+                let (cands, ui) = Self::route(s.draws, self.dress(ui));
                 state.cands = cands;
                 let caret = s.caret;
                 g.focused = Some(session);
@@ -343,7 +432,7 @@ impl Engine {
                 }
                 let Some(s) = g.sessions.get_mut(&session) else { return Reply::Error { message: "no such session".into() } };
                 let (mut state, ui) = self.click(s, session, index.map(|i| i as usize), page);
-                let (cands, ui) = Self::route(s.draws, ui);
+                let (cands, ui) = Self::route(s.draws, self.dress(ui));
                 state.cands = cands;
                 let caret = s.caret;
                 drop(g);
@@ -467,6 +556,7 @@ impl Engine {
         }
         let Some(s) = g.sessions.get_mut(&session) else { return };
         let (state, ui) = self.click(s, session, index, page);
+        let ui = self.dress(ui);
         let notify = s.notify;
         let caret = s.caret;
         // Only a commit or a changed preedit needs the DLL; a page flip is
@@ -554,6 +644,22 @@ mod tests {
         assert!(matches!(c, Some(CandUi::Hide)) && matches!(ui, UiOut::Keep));
         let (c, ui) = Engine::route(true, UiOut::Keep);
         assert!(c.is_none() && matches!(ui, UiOut::Keep));
+    }
+
+    #[test]
+    fn skins() {
+        use super::make_skin;
+        use ime_proto::Weather;
+        let w = Weather { at: 10_000, temp: 20.0, hours: (0..12).map(|i| (if i < 3 { 61 } else { 0 }, true)).collect() };
+        assert!(make_skin("time", Some(&w), 10_000).hours.is_empty());
+        let s = make_skin("weather", Some(&w), 10_000);
+        assert_eq!(s.hours.len(), 8);
+        assert_eq!(s.label, "20° 小雨转晴");
+        // Two hours later the bar starts two hours in.
+        assert_eq!(make_skin("weather", Some(&w), 10_000 + 7300).hours[0].0, 61);
+        assert_eq!(make_skin("weather", Some(&w), 10_000 + 3 * 3600).hours[0].0, 0);
+        // Too old: no weather.
+        assert!(make_skin("weather", Some(&w), 10_000 + 7 * 3600).hours.is_empty());
     }
 
     #[test]

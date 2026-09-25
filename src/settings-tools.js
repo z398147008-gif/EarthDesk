@@ -1049,6 +1049,17 @@ function renderIme() {
     row("中日英混合输入", "不用切换：同一串字母同时按双拼、罗马字和英文单词解析，按词库和上下文把候选排在一起（日语标「日」、英文标「英」，句首英文自动大写）。关掉后默认只打中文，仍可用 /ja 或 Ctrl+Shift+J 切到日语", switchEl(st.mixed !== false, (on) => { st.mixed = on; imeSave(); }))
   );
   parts.push(group("打字", typing));
+  const skin = document.createElement("div");
+  skin.className = "segmented";
+  for (const [v, label] of [["", "跟随系统"], ["weather", "天气"], ["time", "时段"]]) {
+    skin.append(button(label, () => { st.skin = v; imeSave(); renderIme(); }, (st.skin || "") === v ? "on" : ""));
+  }
+  const skinDesc = {
+    "": "白色；Windows 用深色模式时跟着变深",
+    weather: "候选条画出接下来几个小时的天气：最左边是现在，往右是之后每一小时（晴、云、雨、雪、雾、雷），候选条越长看得越远；角上写着气温和天气。天气跟着「位置」走",
+    time: "颜色随一天的时段慢慢变：清晨桃粉、上午清蓝、正午暖白、下午琥珀、傍晚珊瑚到淡紫、夜里浅蓝紫；始终是浅色"
+  }[st.skin || ""];
+  parts.push(group("外观", card(row("候选窗皮肤", skinDesc, skin))));
   const apps = document.createElement("div");
   apps.className = "row";
   apps.append(appChips(st.ascii_apps, () => imeSave()));
@@ -1068,7 +1079,7 @@ function renderIme() {
   help.innerHTML = `<summary>怎么用</summary><ol>
     <li><b>微软双拼</b>；候选按你的使用频率和最近使用自动排序，打过的词组会记住</li>
     <li><b>选词</b>：<b>← →</b> 移动高亮 · <b>↑ ↓</b> 翻页 · 空格上屏高亮的词 · 数字键直接选 · 鼠标点 · <b>- =</b> 或滚轮也能翻页 · <b>[ ]</b> 以词定字（取词的第一个 / 最后一个字）</li>
-    <li><b>上屏英文</b>：Enter 上屏打的字母；Shift 上屏并切到英文</li>
+    <li><b>上屏英文</b>：打字时文字里带下划线的就是你按下的字母（候选窗第一行是它的双拼读音，如 rjhz · ran hou），Enter 原样上屏；词库里没有的英文词也会作为「英」排在候选最后，一样能选；Shift 上屏并切到英文</li>
     <li><b>中日混合</b>：直接按罗马字打日语（watashi → 私），中文、日语、英文候选排在一起；高亮落在日语词上时按 <b>↑ ↓</b> 竖着展开它的其他写法（汉字 / ひらがな / カタカナ …），展开后 <b>↑ ↓</b> 选、<b>← →</b> 翻页、空格上屏、Esc 收回；日语刚上屏后按 <b>\`</b> 在 原样 / ひらがな / カタカナ 之间切换；标点跟着正在打的这句话走：日语句子里 , . 是 、。，中文句子里（夹着英文单词也一样）是 ，。，纯英文句子是 , .</li>
     <li><b>切换</b>：Ctrl+Shift+J 轮换 中日混合 → 日本語 → 中文；或打 <b>/mix</b> <b>/ja</b> <b>/zh</b>（也可以 /hh /ry /zw）空格。每个程序记住自己的选择；F6–F10 日语假名 / 半角 / 英数转换</li>
     <li><b>大写</b>：Caps Lock 打开后字母直接以大写输入；日式键盘上 Shift+逗号键 出 、</li>

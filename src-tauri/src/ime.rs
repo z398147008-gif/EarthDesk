@@ -127,10 +127,59 @@ pub fn ime_save(settings: Settings) -> Result<bool, String> {
     s.page_size = s.page_size.clamp(3, 9);
     s.ascii_apps = s.ascii_apps.into_iter().map(|a| a.trim().to_lowercase()).filter(|a| !a.is_empty()).collect();
     std::fs::create_dir_all(base()).map_err(|e| e.to_string())?;
+    let old = load_settings();
     let json = serde_json::to_vec_pretty(&s).map_err(|e| e.to_string())?;
     std::fs::write(settings_path(), json).map_err(|e| format!("保存失败：{e}"))?;
+    // Only the look changed: the engine picks it up from the file by itself.
+    if s.same_but_skin(&old) {
+        return Ok(true);
+    }
     Ok(matches!(ask(Request::Deploy), Some(Reply::Ok)))
 }
+
+/// The weather skin's data (the candidate window paints the coming hours):
+/// this hour and the next ones from an Open-Meteo answer.
+pub fn weather_for_ime(data: &serde_json::Value) -> Option<ime_proto::Weather> {
+    let cur = data.get("current")?;
+    let now = cur.get("time")?.as_str()?;
+    let hour = now.get(..13)?; // "2026-09-25T13"
+    let hourly = data.get("hourly")?;
+    let times = hourly.get("time")?.as_array()?;
+    let codes = hourly.get("weather_code")?.as_array()?;
+    let days = hourly.get("is_day").and_then(|v| v.as_array());
+    let start = times.iter().position(|t| t.as_str().map(|t| t.starts_with(hour)).unwrap_or(false))?;
+    let mut hours = Vec::new();
+    for i in start..(start + 12).min(times.len()) {
+        let code = codes.get(i).and_then(|c| c.as_u64()).unwrap_or(3) as u8;
+        let day = match days.and_then(|d| d.get(i)).and_then(|d| d.as_u64()) {
+            Some(d) => d == 1,
+            None => cur.get("is_day").and_then(|d| d.as_u64()).unwrap_or(1) == 1,
+        };
+        hours.push((code, day));
+    }
+    // What it is like right now beats the hourly guess for this hour.
+    if let (Some(first), Some(code)) = (hours.first_mut(), cur.get("weather_code").and_then(|c| c.as_u64())) {
+        first.0 = code as u8;
+        first.1 = cur.get("is_day").and_then(|d| d.as_u64()).map(|d| d == 1).unwrap_or(first.1);
+    }
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let temp = cur.get("temperature_2m").and_then(|t| t.as_f64()).unwrap_or(0.0) as f32;
+    Some(ime_proto::Weather { at, temp, hours })
+}
+
+pub fn save_weather(data: &serde_json::Value) {
+    let Some(w) = weather_for_ime(data) else { return };
+    if std::fs::create_dir_all(base()).is_err() {
+        return;
+    }
+    if let Ok(json) = serde_json::to_vec(&w) {
+        let tmp = base().join("weather.json.tmp");
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, base().join("weather.json"));
+        }
+    }
+}
+
 
 /// Rebuild the dictionaries (after editing the quick phrases by hand, say).
 #[tauri::command]
@@ -180,5 +229,23 @@ pub fn ime_open(what: String) -> Result<(), String> {
     {
         let _ = target;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn weather_hours() {
+        let data = serde_json::json!({
+            "current": { "time": "2026-09-25T13:15", "weather_code": 61, "is_day": 1, "temperature_2m": 17.6 },
+            "hourly": {
+                "time": ["2026-09-25T12:00", "2026-09-25T13:00", "2026-09-25T14:00", "2026-09-25T19:00"],
+                "weather_code": [3, 3, 0, 0],
+                "is_day": [1, 1, 1, 0]
+            }
+        });
+        let w = super::weather_for_ime(&data).unwrap();
+        assert_eq!(w.hours, vec![(61, true), (0, true), (0, false)]);
+        assert_eq!(w.label(3), "18° 小雨转晴");
     }
 }
