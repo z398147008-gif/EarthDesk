@@ -10,3 +10,5 @@ node_modules/
 /src/textures/*_old*.jpg
 # 旧图标备份
 /src-tauri/icons/_old/
+# Claude 会话留下的临时文件
+/_claude_tmp/
