@@ -1,4 +1,4 @@
-﻿# 把这个项目推到 GitHub:https://github.com/z398147008-gif/EarthDesk
+﻿# 把这个项目和 GitHub 双向同步(先拉取合并,再上传):https://github.com/z398147008-gif/EarthDesk
 # 第一次运行会弹出浏览器让你登录 GitHub,登录完就会自动上传。
 $ErrorActionPreference = "Continue"
 $root = Join-Path $PSScriptRoot ".."
@@ -49,6 +49,41 @@ if ($LASTEXITCODE -ne 0) {
         exit 1
     }
     Write-Host "  已记录本地改动。" -ForegroundColor Gray
+}
+
+# 先把 GitHub 上别处(比如 Claude)推上去的新改动拉下来合并,再上传。
+# 不这样做的话,只要 GitHub 上比本地新,上传就会被拒绝。
+Write-Host "  正在同步 GitHub 上的新改动…" -ForegroundColor Gray
+$before = git rev-parse HEAD
+git fetch origin
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  连不上 GitHub(上面有原因),这次没有同步也没有上传。检查网络/VPN 后再试。" -ForegroundColor Yellow
+    Read-Host "`n按回车关闭"
+    exit 1
+}
+git rev-parse --verify -q origin/main | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    git merge --no-edit origin/main
+    if ($LASTEXITCODE -ne 0) {
+        $conflicts = git diff --name-only --diff-filter=U
+        git merge --abort 2>$null
+        Write-Host ""
+        Write-Host "  同步失败:你本地改的和 GitHub 上的改到了同一处,需要手动合并。" -ForegroundColor Yellow
+        if ($conflicts) {
+            Write-Host "  冲突的文件:" -ForegroundColor Yellow
+            $conflicts | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }
+        }
+        Write-Host "  本地文件没有被改动。把这个窗口截图发给 Claude。" -ForegroundColor Yellow
+        Read-Host "`n按回车关闭"
+        exit 1
+    }
+    if ((git rev-parse HEAD) -ne $before) {
+        Write-Host "  已同步 GitHub 上的新改动:" -ForegroundColor Green
+        git -c core.quotepath=false diff --stat $before HEAD | Select-Object -Last 12 | ForEach-Object { Write-Host "    $_" }
+        Write-Host "  (程序正在运行的话,重新打开一下才能看到效果)" -ForegroundColor Gray
+    } else {
+        Write-Host "  GitHub 上没有新改动。" -ForegroundColor Gray
+    }
 }
 
 Write-Host "  正在上传(约 25 MB,第一次会弹浏览器让你登录 GitHub)…" -ForegroundColor Gray
