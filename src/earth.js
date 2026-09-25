@@ -510,7 +510,10 @@ void main() {
       float thinC = cloudRGB.b;
       float cloudRaw = cloudRG.r;
       float cTop = cloudRG.g;                      // 0..1 of HMAX
-      float base = smoothstep(uCloudLevels.x, uCloudLevels.y, cloudRaw);
+      // v20: the faintest tenth of the map is sub-pixel cumulus and haze; drawn,
+      // it covers the open sea in a grainy white sprinkle the reference does
+      // not have. Start the cloud a little above it.
+      float base = smoothstep(uCloudLevels.x + 0.06, uCloudLevels.y, cloudRaw);
 
       // The map is ~5 km a pixel and soft; real cloud has structure far below
       // that. Procedural detail, evaluated on the sphere and drifting slowly,
@@ -552,7 +555,12 @@ void main() {
       // most of what separates layered cloud from a flat white stencil.
       float thick = smoothstep(0.10, 0.62, cTop);
       body = pow(body, mix(1.7, 1.0, thick));
-      float bodyA = pow(body, 1.05) * mix(0.60, 0.97, thick);
+      // v20: the reference's decks are translucent gauze almost everywhere --
+      // the ground reads through the frontal band -- and only storm cores go
+      // solid.
+      float stormCore = smoothstep(0.80, 0.97, body) * smoothstep(0.55, 0.85, cTop);
+      float bodyA = pow(body, 1.20) * mix(0.52, 0.78, thick);
+      bodyA = mix(bodyA, max(bodyA, 0.95 * body), stormCore);
       // A thin veil wherever the map has any cloud at all: cirrus and haze
       // lying over the ground, which is most of what makes the reference's
       // cloud look layered instead of stencilled.
@@ -567,7 +575,10 @@ void main() {
       veil *= mix(0.3, 1.0, water);
       veil *= mix(0.25, 1.0, day);          // thin cloud barely shows at night
       veil *= 1.0 - limbFade;               // streak noise aliases edge-on
-      float cloud = clamp(bodyA + veil * 0.42, 0.0, 1.0) * uCloudOpacity;
+      // v20: the reference's open sea is clean between cloud clusters; the
+      // streaky veil at full strength covered it in a grainy white sprinkle.
+      veil = smoothstep(0.12, 0.75, veil);
+      float cloud = clamp(bodyA + veil * 0.22, 0.0, 1.0) * uCloudOpacity;
       // Thinner toward the edge: from about 55 degrees off vertical the cover
       // eases off to under a third by the limb, so decks do not pile up there.
       cloud *= 1.0 - 0.70 * pow(limbFade, 1.5);
@@ -662,7 +673,7 @@ void main() {
       vec2 qS = textureGrad(uClouds, cuv + dN * 6.0, ddx * bc, ddy * bc).rg;
       float gE = qE.r * 0.6 + qE.g, gW = qW.r * 0.6 + qW.g;
       float gN = qN.r * 0.6 + qN.g, gS = qS.r * 0.6 + qS.g;
-      float bumpK = mix(1.1, 2.2, smoothstep(0.25, 0.7, cTop)) * (1.0 - 0.85 * limbFlat);
+      float bumpK = mix(1.6, 3.0, smoothstep(0.25, 0.7, cTop)) * (1.0 - 0.85 * limbFlat);
       vec3 cN3 = normalize(n - bumpK * ((fE - fW) * east + (fN - fS) * north)
                              - 0.7 * (1.0 - 0.85 * limbFlat) * ((gE - gW) * east + (gN - gS) * north));
       // Cavities: where this spot is thinner than its surroundings it sits
@@ -697,12 +708,12 @@ void main() {
       // still shaped by their own relief.
       cloudLightC += vec3(0.11, 0.115, 0.13) * (0.7 + 0.3 * clamp(dot(cN3, n), 0.0, 1.0)) * (1.0 - day);
       cloudLightC *= 1.0 + 0.10 * relief * day;
-      cloudLightC *= 1.0 - 0.45 * cavity;
+      cloudLightC *= 1.0 - 0.60 * cavity;
       float cloudLight = dot(cloudLightC, vec3(0.2126, 0.7152, 0.0722));
 
       // Colour by kind: high, cold tops (cirrus, anvils) are the brightest
       // pure white; low decks a touch grey; thin veil translucent blue-grey.
-      vec3 cloudCol = mix(vec3(0.70, 0.76, 0.86), vec3(1.10, 1.09, 1.08), sqrt(body));
+      vec3 cloudCol = mix(vec3(0.62, 0.68, 0.78), vec3(1.02, 1.02, 1.02), sqrt(body));
       cloudCol *= mix(0.86, 1.12, thick);
       cloudCol = mix(cloudCol * vec3(0.80, 0.84, 0.92), cloudCol, day);
       cloudCol *= cloudLightC / max(cloudLight, 1e-3);   // tint by the light's colour
