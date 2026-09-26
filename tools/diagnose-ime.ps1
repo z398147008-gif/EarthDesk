@@ -34,7 +34,14 @@ try {
 Add "== 引擎日志 %APPDATA%\EarthDesk\ime"
 $ud = Join-Path $env:APPDATA "EarthDesk\ime"
 Get-ChildItem $ud -Recurse -ErrorAction SilentlyContinue | Select-Object -First 40 | ForEach-Object { Add ("   {0,10}  {1}" -f $_.Length, $_.FullName.Substring($ud.Length)) }
-Get-Content (Join-Path $ud "ime.log") -Encoding UTF8 -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object { Add ("   log: " + $_) }
+$log = @(Get-Content (Join-Path $ud "ime.log") -Encoding UTF8 -Tail 3000 -ErrorAction SilentlyContinue)
+$log | Select-Object -Last 30 | ForEach-Object { Add ("   log: " + $_) }
+# 每个程序最近的记录(最后 30 行常常只有一个程序,别的程序的问题就看不到了)
+$apps = $log | ForEach-Object { if ($_ -match 'dll \[([^\]]+)\]') { $Matches[1] } } | Select-Object -Unique
+foreach ($app in $apps) {
+    Add "   --- $app"
+    $log | Where-Object { $_ -like "*dll ``[$app``]*" } | Select-Object -Last 25 | ForEach-Object { Add ("   log: " + $_) }
+}
 Get-ChildItem $ud -Filter "rime.*" -File -ErrorAction SilentlyContinue | ForEach-Object {
     Add "   --- $($_.Name)"
     Get-Content $_.FullName -Tail 20 | ForEach-Object { Add ("   " + $_) }

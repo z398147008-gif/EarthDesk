@@ -230,3 +230,30 @@ pub fn caret_left(n: u32) {
         SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
     }
 }
+
+/// Shift, Ctrl or Alt held on the keyboard right now.
+pub fn modifiers_held() -> bool {
+    [VK_SHIFT, VK_CONTROL, VK_MENU].iter().any(|k| unsafe { GetAsyncKeyState(k.0 as i32) } as u16 & 0x8000 != 0)
+}
+
+/// Toggle Caps Lock for the program (the JIS keyboard's 英数 key, see
+/// service.rs), marked as ours (INJECTED) so the text service lets it
+/// through. Sent as the virtual key itself: the Japanese layout turns only
+/// the key's scan code, not VK_CAPITAL, into 英数.
+pub fn toggle_caps() {
+    let key = |up: bool| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VK_CAPITAL,
+                wScan: 0x3A,
+                dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) },
+                time: 0,
+                dwExtraInfo: ime_proto::INJECTED,
+            },
+        },
+    };
+    unsafe {
+        SendInput(&[key(false), key(true)], std::mem::size_of::<INPUT>() as i32);
+    }
+}
