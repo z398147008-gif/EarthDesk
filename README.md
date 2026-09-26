@@ -65,6 +65,8 @@ cargo tauri dev
 cargo tauri build
 ```
 
+版本号每次打包自动刷新：主、次版本取自 `tauri.conf.json`，第三位是 Git 提交数（`3-打包` 用 `--config` 临时覆盖，不改文件）。安装包每次都会先静默卸载旧版本（用户数据保留），装完默认随系统启动，桌面快捷方式默认不勾选。
+
 产物是 `src-tauri/target/release/bundle/nsis/` 下的 `地球桌面_x.y.z_x64-setup.exe`(用 NSIS 而不是
 MSI:WiX 的 light.exe 遇到中文路径会失败)。安装脚本 `src-tauri/windows/hooks.nsh` 在安装时
 静默装好 PawnIO 驱动、注册一个开机运行的计划任务启动硬件监控(所以平时不会再弹 UAC)、

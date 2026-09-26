@@ -67,7 +67,50 @@
   !insertmacro EARTHDESK_IME_MOVE_ASIDE_ALL ${ID}
 !macroend
 
+; The finish page's "create a desktop shortcut" box starts unticked (Tauri's
+; template ticks it). The template reads this define after including us.
+!define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
+
+; Always install clean: whatever version is there, its own uninstaller runs
+; first (silently; user data under %APPDATA% stays: the uninstaller only
+; deletes it when asked, which a silent run never does). Tauri's page before
+; this only offers it; the choice made there no longer matters.
+!macro EARTHDESK_UNINSTALL_OLD
+  ReadRegStr $R5 SHCTX "${MANUPRODUCTKEY}" ""
+  StrCmp $R5 "" 0 +2
+    StrCpy $R5 $INSTDIR
+  IfFileExists "$R5\${MAINBINARYNAME}.exe" 0 old_done
+  IfFileExists "$R5\uninstall.exe" 0 old_done
+    DetailPrint "正在卸载旧版本…"
+    nsExec::Exec 'taskkill /F /IM ${MAINBINARYNAME}.exe'
+    Sleep 500
+    ; _?= keeps the uninstaller in place, so ExecWait really waits for it.
+    ExecWait '"$R5\uninstall.exe" /S _?=$R5' $R6
+    Delete "$R5\uninstall.exe"
+    DetailPrint "旧版本已卸载（返回 $R6）"
+  old_done:
+!macroend
+
+; The same, already when the welcome page is left: then Tauri's "an older
+; version is installed, uninstall it first?" page that follows finds nothing
+; installed and skips itself (it would otherwise ask, and its uninstall
+; shows the old uninstaller's own dialogs). This file is included before the
+; template names its registry keys, so they are spelt out here: publisher
+; "EarthDesk", product "地球桌面", perMachine (HKLM).
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE EarthDeskUninstallOldEarly
+Function EarthDeskUninstallOldEarly
+  ReadRegStr $R5 HKLM "Software\EarthDesk\地球桌面" ""
+  StrCmp $R5 "" early_done
+  IfFileExists "$R5\uninstall.exe" 0 early_done
+    nsExec::Exec 'taskkill /F /IM EarthDesk.exe'
+    Sleep 500
+    ExecWait '"$R5\uninstall.exe" /S _?=$R5' $R6
+    Delete "$R5\uninstall.exe"
+  early_done:
+FunctionEnd
+
 !macro NSIS_HOOK_PREINSTALL
+  !insertmacro EARTHDESK_UNINSTALL_OLD
   ; Upgrading over an older copy: stop the running monitor so its files can
   ; be replaced.
   IfFileExists "$INSTDIR\sensors\setup-sensors.ps1" 0 +2
@@ -88,9 +131,10 @@
   ; reach elevated windows. The app starts itself elevated through a
   ; scheduled task ("run with highest privileges"); creating that task needs
   ; the elevation the installer already has, so do it here and the user
-  ; never sees a UAC prompt for it. Starting with Windows is kept as it was.
+  ; never sees a UAC prompt for it. Every install starts with Windows (the
+  ; settings page can turn it off).
   DetailPrint "正在设置以管理员身份启动…"
-  nsExec::ExecToLog '"$INSTDIR\EarthDesk.exe" --setup-task'
+  nsExec::ExecToLog '"$INSTDIR\EarthDesk.exe" --setup-task --autostart'
   ; The input method: register both DLLs (64- and 32-bit programs), add it to
   ; this user's keyboard list and build the dictionaries now, so it types
   ; the moment the user switches to it. The engine then starts at every
