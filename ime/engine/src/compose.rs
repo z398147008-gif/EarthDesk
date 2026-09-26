@@ -167,6 +167,10 @@ fn ja_punct(code: u32) -> Option<&'static str> {
     })
 }
 
+/// X11's VoidSymbol: a key no processor takes, only there to be "some
+/// other key" for Rime's Shift switch.
+const VOID_SYMBOL: u32 = 0xff_ffff;
+
 fn is_shift(code: u32) -> bool {
     code == ks::SHIFT_L || code == ks::SHIFT_R
 }
@@ -513,6 +517,11 @@ impl Engine {
             if !idle {
                 self.clear_comp(s);
             }
+            // Rime never sees Caps Lock (handled here): a key in between
+            // for its Shift switch, so Shift+Caps Lock (Caps Lock on a JIS
+            // keyboard) does not also switch to English on Shift's release.
+            let rs = self.rime_session(s);
+            self.rime.process_key(rs, VOID_SYMBOL, 0);
             if !typed.is_empty() {
                 self.committed(s, &typed, Lang::En, "");
             }

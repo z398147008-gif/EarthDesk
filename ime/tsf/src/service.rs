@@ -68,6 +68,12 @@ pub struct TextService {
     /// The preedit last put in the document (what an ended composition
     /// leaves behind).
     last_preedit: RefCell<Vec<u16>>,
+    /// The preedit in the engine's last answer, put in or not: a key-up
+    /// that leaves it as it was changes nothing in the document.
+    engine_pre: RefCell<Vec<u16>>,
+    /// 英数 pressed (a JIS keyboard's Caps Lock key): Caps Lock as it will
+    /// be once our toggle is in, for the release's notice.
+    alnum_caps: Cell<Option<bool>>,
     ended: edit::Ended,
     /// Interfaces to ourselves, set right after creation.
     me: RefCell<Option<IUnknown>>,
@@ -98,6 +104,8 @@ impl TextService {
             retries: Cell::new(0),
             left_after: Cell::new(0),
             last_preedit: RefCell::new(Vec::new()),
+            engine_pre: RefCell::new(Vec::new()),
+            alnum_caps: Cell::new(None),
             ended: Rc::new(Cell::new(0)),
             me: RefCell::new(None),
         });
@@ -385,6 +393,7 @@ impl TextService {
                 _ => return,
             }
         };
+        self.heard(&st);
         if st.commit.is_some() || st.preedit.is_some() {
             self.apply(&ctx, &st, false);
         }
@@ -401,6 +410,7 @@ impl TextService {
                 None => return,
             }
         };
+        self.heard(&st);
         let composing = self.composition.try_borrow().map(|c| c.is_some()).unwrap_or(false);
         if st.commit.is_some() || st.preedit.is_some() || composing {
             self.apply(&ctx, &st, false);
@@ -441,33 +451,13 @@ impl TextService {
             return false;
         };
         let context = Some(&ctx);
-        // The program cut our composition off since the last key: carry on
-        // over its text if the caret is still right after it, else start
-        // afresh.
+        // A JIS keyboard's Caps Lock key (see alnum_key), alone.
+        if wp.0 == 0xF0 && !keys::modifiers_held() {
+            return self.alnum_key(&ctx, lp, up, defer);
+        }
         let mut adopt = edit::Adopt::No;
         if !up {
-            let orphan = self.orphan.borrow_mut().take();
-            if let (Some(o), Some(ctx)) = (orphan, context) {
-                match edit::find_orphan(self.tid.get(), ctx, &o.text) {
-                    edit::Found::Here(r) => {
-                        adopt = edit::Adopt::Range(r);
-                        self.note(&format!("cut-off composition ({} chars) taken over", o.text.len()));
-                    }
-                    // Cannot look now: look inside the edit itself, if the
-                    // key comes soon after (the user is still typing on).
-                    edit::Found::Refused if o.at.elapsed() < std::time::Duration::from_secs(10) => {
-                        self.note("cut-off composition: program refused a look, trying inside the edit");
-                        adopt = edit::Adopt::Find(o.text);
-                    }
-                    _ => {
-                        self.note(&format!("cut-off composition ({} chars) not at the caret any more: dropped", o.text.len()));
-                        candwin::hide();
-                        if let Ok(mut c) = self.client.try_borrow_mut() {
-                            c.tell(|session| Request::Reset { session });
-                        }
-                    }
-                }
-            }
+            adopt = self.adopt_orphan(&ctx);
         }
         let state = {
             let Ok(mut c) = self.client.try_borrow_mut() else { return false };
@@ -485,6 +475,21 @@ impl TextService {
                 }
             }
         };
+        let before = self.heard(&state);
+        // A release that leaves the engine's answer as it was changes
+        // nothing in the document — also when the program cut the
+        // composition off meanwhile: putting the spelling in again would
+        // type it twice ("vemvem"); the next key takes the cut-off text
+        // over (Orphan). Programs that report releases through OnKeyUp
+        // (Chromium) do exactly that after every key.
+        if up {
+            let same = state.commit.is_none() && state.preedit.as_ref().map(|p| p.text.encode_utf16().collect::<Vec<u16>>()).unwrap_or_default() == before;
+            if same {
+                self.show_cands(&state);
+                return false;
+            }
+            adopt = self.adopt_orphan(&ctx);
+        }
         // Eaten in OnTestKeyDown: the edit waits for the OnKeyDown that
         // follows. Programs refuse edits while they are only asking whether
         // we want a key (Chromium answers TS_E_SYNCHRONOUS even to a queued
@@ -494,6 +499,81 @@ impl TextService {
             return true;
         }
         self.finish(context, state, adopt, up)
+    }
+
+    /// The engine answered `state`: its preedit before this answer.
+    fn heard(&self, state: &State) -> Vec<u16> {
+        let now: Vec<u16> = state.preedit.as_ref().map(|p| p.text.encode_utf16().collect()).unwrap_or_default();
+        self.engine_pre.try_borrow_mut().map(|mut p| std::mem::replace(&mut *p, now)).unwrap_or_default()
+    }
+
+    /// The program cut our composition off since the last key: carry on
+    /// over its text if the caret is still right after it, else start
+    /// afresh (the engine forgets it).
+    fn adopt_orphan(&self, ctx: &ITfContext) -> edit::Adopt {
+        let Some(o) = self.orphan.borrow_mut().take() else { return edit::Adopt::No };
+        match edit::find_orphan(self.tid.get(), ctx, &o.text) {
+            edit::Found::Here(r) => {
+                self.note(&format!("cut-off composition ({} chars) taken over", o.text.len()));
+                edit::Adopt::Range(r)
+            }
+            // Cannot look now: look inside the edit itself, if the key
+            // comes soon after (the user is still typing on).
+            edit::Found::Refused if o.at.elapsed() < std::time::Duration::from_secs(10) => {
+                self.note("cut-off composition: program refused a look, trying inside the edit");
+                edit::Adopt::Find(o.text)
+            }
+            _ => {
+                self.note(&format!("cut-off composition ({} chars) not at the caret any more: dropped", o.text.len()));
+                candwin::hide();
+                if let Ok(mut c) = self.client.try_borrow_mut() {
+                    c.tell(|session| Request::Reset { session });
+                }
+                if let Ok(mut p) = self.engine_pre.try_borrow_mut() {
+                    p.clear();
+                }
+                edit::Adopt::No
+            }
+        }
+    }
+
+    /// 英数: the Caps Lock key of a JIS keyboard, as the Japanese layout
+    /// we register on such keyboards (register.rs) reports it without
+    /// Shift. There it locks nothing (only Shift+英数 is Caps Lock), so
+    /// capitals could not be locked at all. Here it is the Caps Lock key it
+    /// says it is: to the engine a Caps Lock press (what was typed so far
+    /// goes in as it is), then Caps Lock toggled for the program; eaten.
+    fn alnum_key(&self, ctx: &ITfContext, lp: LPARAM, up: bool, defer: bool) -> bool {
+        use windows::Win32::UI::Input::KeyboardAndMouse::VK_CAPITAL;
+        let (vk, scan, flags, hkl) = keys::raw(VK_CAPITAL.0, lp.0, up);
+        if up {
+            // The release: the engine's notice says which way (大写 / 中文),
+            // with Caps Lock as our toggle leaves it.
+            let Some(on) = self.alnum_caps.take() else { return false };
+            let flags = if on { flags | ime_proto::rawkey::CAPS } else { flags & !ime_proto::rawkey::CAPS };
+            let state = self.client.try_borrow_mut().ok().and_then(|mut c| c.raw_key(vk, scan, flags, hkl).ok().flatten());
+            if let Some(state) = state {
+                self.heard(&state);
+                self.show_cands(&state);
+            }
+            return false;
+        }
+        let on = flags & ime_proto::rawkey::CAPS != 0;
+        let state = self.client.try_borrow_mut().ok().and_then(|mut c| c.raw_key(vk, scan, flags, hkl).ok().flatten());
+        if let Some(mut state) = state {
+            self.heard(&state);
+            let adopt = self.adopt_orphan(ctx);
+            // Ours now: the program never sees 英数.
+            state.eaten = true;
+            if defer {
+                *self.deferred.borrow_mut() = Some((state, adopt, ctx.clone()));
+            } else {
+                self.finish(Some(ctx), state, adopt, false);
+            }
+        }
+        keys::toggle_caps();
+        self.alnum_caps.set(Some(!on));
+        true
     }
 
     /// Put the engine's answer into the document and the window.
@@ -556,6 +636,10 @@ impl TextService {
     fn reset(&self) {
         candwin::hide();
         *self.orphan.borrow_mut() = None;
+        if let Ok(mut p) = self.engine_pre.try_borrow_mut() {
+            p.clear();
+        }
+        self.alnum_caps.set(None);
         if let Ok(mut d) = self.deferred.try_borrow_mut() {
             *d = None;
         }
