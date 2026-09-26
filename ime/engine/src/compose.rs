@@ -1047,8 +1047,13 @@ impl Engine {
         let loser_real = if zh_wins { jinfo.hit } else { zinfo.whole >= 1 && !zinfo.partial };
         comp.merged = mixed::merge_with(&zh_cands, ja_cands, sz, sj, loser_real);
         // English: the letters as typed, if they are an English word.
-        let words = if comp.keys.iter().all(|k| k.0.is_ascii_alphabetic()) { self.en.lookup(&code, mixed::sentence_start(&s_recent)) } else { Vec::new() };
-        if let Some(se) = mixed::en_score(&code, !words.is_empty(), last) {
+        let letters = comp.keys.iter().all(|k| k.0.is_ascii_alphabetic());
+        let mut words = if letters { self.en.lookup(&code, mixed::sentence_start(&s_recent)) } else { Vec::new() };
+        // Picked as English before: that spelling, higher up.
+        let learned = if letters { self.enpref.lock().ok().and_then(|e| e.get(&code)) } else { None };
+        let base = mixed::en_score(&code, !words.is_empty(), last);
+        let se = mixed::en_learned(&mut words, base, learned, zp, jp);
+        if let Some(se) = se {
             let best = match (sz, sj) {
                 (Some(a), Some(b)) => Some(a.max(b)),
                 (a, b) => a.or(b),
@@ -1292,6 +1297,9 @@ impl Engine {
             }
             Lang::En => {
                 self.clear_comp(s);
+                if let Ok(mut e) = self.enpref.lock() {
+                    e.record(&code, &item.text);
+                }
                 self.committed(s, &item.text, Lang::En, &code);
                 (State { eaten: true, commit: Some(item.text), ..Default::default() }, UiOut::Hide)
             }

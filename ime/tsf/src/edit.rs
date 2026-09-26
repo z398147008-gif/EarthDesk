@@ -333,6 +333,10 @@ unsafe fn closer_ahead(ec: u32, sel: &ITfRange, text: &str) -> Option<ITfRange> 
     Some(next)
 }
 
+/// Apply `state` to `context`. Ok: done or queued by the program (with a
+/// note for the log when something inside went wrong); Err: the program
+/// refused every way of asking, nothing happened.
+///
 /// Apply `state` to `context`. Inside key handling we ask for the edit
 /// synchronously (the text must be there before the program sees the next
 /// key); programs that refuse synchronous edits (Chromium-based apps
@@ -350,7 +354,7 @@ pub fn apply(
     on_caret: OnCaret,
     adopt: Adopt,
     ended: &Ended,
-) -> Option<String> {
+) -> std::result::Result<Option<String>, String> {
     let err: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let make = || -> ITfEditSession {
         Apply {
@@ -376,15 +380,22 @@ pub fn apply(
     unsafe {
         if sync {
             match context.RequestEditSession(tid, &make(), TF_ES_SYNC | TF_ES_READWRITE) {
-                Ok(hr) if hr.is_ok() => return err.borrow_mut().take(),
+                Ok(hr) if hr.is_ok() => return Ok(err.borrow_mut().take()),
                 // Refused now (Chromium, often): later, in order.
                 Ok(_) | Err(_) => {}
             }
+        } else if let Ok(hr) = context.RequestEditSession(tid, &make(), TF_ES_ASYNCDONTCARE | TF_ES_READWRITE) {
+            // Outside key handling (a retry, a click): now if the program
+            // lets us, which it then does.
+            if queued(hr) {
+                return Ok(err.borrow_mut().take());
+            }
         }
         match context.RequestEditSession(tid, &make(), queue) {
-            Ok(hr) if queued(hr) => None,
-            Ok(hr) => Some(format!("edit refused, also queued ({hr:?})")),
-            Err(e) => Some(format!("edit request failed ({e})")),
+            Ok(hr) if queued(hr) => Ok(None),
+            // Nothing was done: the caller keeps the edit and tries again.
+            Ok(hr) => Err(format!("{hr:?}")),
+            Err(e) => Err(e.to_string()),
         }
     }
 }
