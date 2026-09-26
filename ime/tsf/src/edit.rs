@@ -136,6 +136,29 @@ pub fn find_orphan(tid: u32, context: &ITfContext, text: &[u16]) -> Found {
     }
 }
 
+/// Can text go into this context at all? Programs point the keyboard at
+/// contexts that take none while nothing editable has the focus: Chrome at
+/// its "empty" document (read-only, keyboard disabled) whenever the page's
+/// focus is not in a text field, and its password fields are disabled for
+/// input methods. Every edit there fails (TS_E_READONLY), so keys there are
+/// the program's (a web app's shortcuts), never typing.
+pub fn writable(ctx: &ITfContext) -> bool {
+    unsafe {
+        if ctx.GetStatus().map(|st| st.dwDynamicFlags & TS_SD_READONLY != 0).unwrap_or(false) {
+            return false;
+        }
+        let Ok(cm) = ctx.cast::<ITfCompartmentMgr>() else { return true };
+        for guid in [&GUID_COMPARTMENT_KEYBOARD_DISABLED, &GUID_COMPARTMENT_EMPTYCONTEXT] {
+            if let Ok(v) = cm.GetCompartment(guid).and_then(|c| c.GetValue()) {
+                if v.vt() == windows::Win32::System::Variant::VT_I4 && v.Anonymous.Anonymous.Anonymous.lVal != 0 {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+
 unsafe fn selection_range(ctx: &ITfContext, ec: u32) -> Result<ITfRange> {
     ctx.cast::<ITfInsertAtSelection>()?.InsertTextAtSelection(ec, TF_IAS_QUERYONLY, &[])
 }

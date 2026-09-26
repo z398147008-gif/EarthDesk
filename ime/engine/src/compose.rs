@@ -22,6 +22,7 @@ use ime_proto::{keysym as ks, mask, Preedit, State};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mode {
@@ -374,22 +375,32 @@ impl Engine {
         }
 
         let idle = s.comp.is_none() && s.cmd.is_none() && !self.rime.snapshot(self.rime_session(s)).composing;
+        if idle {
+            self.follow_ascii(s);
+        }
 
-        // Caps Lock. By default (settings: caps_english) it switches to
-        // English the way it does on a Mac: while it is on, letters come
-        // out small (Shift for capitals) and everything else as the
-        // keyboard types it; off again, back to Chinese. Otherwise: capitals,
-        // typed straight into the program. Either way, pressed in the
-        // middle of a word, what was typed so far goes in as it is.
-        let caps_english = self.settings.lock().map(|st| st.caps_english).unwrap_or(true);
+        // Caps Lock locks capitals, as in every Windows input method: while
+        // it is on, letters, digits and punctuation go to the program as the
+        // keyboard types them (Shift for small letters). With the setting
+        // caps_english it switches to English the way it does on a Mac
+        // instead: letters come out small, Shift for capitals. Either way,
+        // pressed in the middle of a word, what was typed so far goes in as
+        // it is.
+        let caps_english = self.settings.lock().map(|st| st.caps_english).unwrap_or(false);
         if code == ks::CAPS_LOCK {
             // Which way it switched is only certain on the release: on the
             // press, programs differ in whether Windows has flipped the
             // light yet (Chrome: not yet; hence 中文 shown for English).
             if up {
                 let on = m & mask::LOCK != 0;
-                let ui = if caps_english { self.flash(session, if on { "英文" } else { "中文" }) } else { UiOut::Keep };
-                return (pass(), ui);
+                let label = match (on, caps_english) {
+                    (true, true) => "英文",
+                    (true, false) => "大写",
+                    // Off: what typing gives now (Shift may have switched
+                    // to English meanwhile).
+                    (false, _) => self.ascii_label(s),
+                };
+                return (pass(), self.flash(session, label));
             }
             let typed = if idle { String::new() } else { self.typed_so_far(s) };
             if !idle {
@@ -403,28 +414,21 @@ impl Engine {
             return (State { eaten: false, commit, ..Default::default() }, ui);
         }
         if m & mask::LOCK != 0 && !ctrl_alt && idle {
-            let ch = char::from_u32(code);
-            if caps_english && ch.map(|c| c.is_ascii_graphic()).unwrap_or(false) {
-                let c = ch.unwrap();
-                if up || !c.is_ascii_alphabetic() {
-                    // Digits, punctuation: as the keyboard types them.
-                    if !up {
-                        self.committed(s, &c.to_string(), Lang::En, "");
-                    }
-                    return (pass(), UiOut::Keep);
-                }
-                // The program would type a capital (Caps Lock is on for it
-                // too): put the letter in ourselves, the other way round.
-                let t = if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c.to_ascii_uppercase() }.to_string();
-                self.committed(s, &t, Lang::En, "");
-                return (State { eaten: true, commit: Some(t), ..Default::default() }, UiOut::Hide);
-            }
-            if !caps_english && ch.map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
-                if !up {
-                    let t = ch.unwrap().to_string();
+            if let Some(c) = char::from_u32(code).filter(|c| c.is_ascii_graphic()) {
+                if caps_english && c.is_ascii_alphabetic() && !up {
+                    // The program would type a capital (Caps Lock is on for
+                    // it too): put the letter in ourselves, the other way
+                    // round.
+                    let t = if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c.to_ascii_uppercase() }.to_string();
                     self.committed(s, &t, Lang::En, "");
+                    return (State { eaten: true, commit: Some(t), ..Default::default() }, UiOut::Hide);
                 }
-                return (pass(), UiOut::Hide);
+                // As the keyboard types it (capitals: the program applies
+                // Caps Lock itself), never 。 or a composition.
+                if !up {
+                    self.committed(s, &c.to_string(), Lang::En, "");
+                }
+                return (pass(), if c.is_ascii_alphabetic() { UiOut::Hide } else { UiOut::Keep });
             }
         }
         if plain && idle && (code == ks::RETURN || code == ks::KP_ENTER) {
@@ -460,7 +464,50 @@ impl Engine {
             return (eaten_with(preedit_end("/")), self.cmd_view(session, ""));
         }
 
-        self.dispatch(s, session, code, m)
+        // Shift alone switches 中 / 英 (in Rime, on its release): say which
+        // way, and make it the switch for every program.
+        let was = self.rime_ascii(s);
+        let (st, ui) = self.dispatch(s, session, code, m);
+        let now = self.rime_ascii(s);
+        if now != was {
+            if !self.own_ascii(s) {
+                self.ascii.store(now, Ordering::Relaxed);
+            }
+            return (st, self.flash(session, self.ascii_label(s)));
+        }
+        (st, ui)
+    }
+
+    /// What typing gives now, for the switch's flash.
+    fn ascii_label(&self, s: &mut Sess) -> &'static str {
+        if self.rime_ascii(s) {
+            "英文"
+        } else if s.mode == Mode::Ja {
+            "日本語"
+        } else {
+            "中文"
+        }
+    }
+
+    /// Programs the settings start in English (terminals, games) keep a 中 /
+    /// 英 switch of their own.
+    fn own_ascii(&self, s: &Sess) -> bool {
+        self.settings.lock().map(|st| st.ascii_apps.iter().any(|a| a.eq_ignore_ascii_case(&s.exe))).unwrap_or(false)
+    }
+
+    /// 中 / 英 is one switch for every program, as in the Windows input
+    /// methods: English chosen with Shift in one window is English in the
+    /// next one too (and in a new session of the same program, which every
+    /// reconnect or new window is). Only between words.
+    fn follow_ascii(&self, s: &mut Sess) {
+        if self.own_ascii(s) {
+            return;
+        }
+        let want = self.ascii.load(Ordering::Relaxed);
+        let rs = self.rime_session(s);
+        if self.rime.get_option(rs, "ascii_mode") != want {
+            self.rime.set_option(rs, "ascii_mode", want);
+        }
     }
 
     fn dispatch(&self, s: &mut Sess, session: u64, code: u32, m: u32) -> (State, UiOut) {

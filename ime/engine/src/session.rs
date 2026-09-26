@@ -13,6 +13,7 @@ use crate::mozc::Mozc;
 use crate::rime::{Rime, Snapshot};
 use ime_proto::{CandUi, Cands, Preedit, Reply, Request, State};
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -129,6 +130,9 @@ pub struct Engine {
     pub(crate) en: crate::mixed::EnDict,
     pub(crate) hidden: Mutex<crate::mixed::Hidden>,
     pub(crate) enpref: Mutex<crate::mixed::EnPref>,
+    /// 中 / 英 (Rime's ascii_mode), one switch for every program as in the
+    /// Windows input methods (see compose.rs, follow_ascii).
+    pub(crate) ascii: AtomicBool,
     look: Mutex<Look>,
 }
 
@@ -221,6 +225,7 @@ impl Engine {
             en,
             hidden: Mutex::new(crate::mixed::Hidden::load(&crate::paths::data_file("hidden.json"))),
             enpref: Mutex::new(crate::mixed::EnPref::load(&crate::paths::data_file("enpref.json"))),
+            ascii: AtomicBool::new(false),
             look: Mutex::new(Look::default()),
         }
     }
