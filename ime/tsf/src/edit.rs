@@ -378,26 +378,25 @@ pub fn apply(
         }
         .into()
     };
-    let async_flags = TF_ES_ASYNCDONTCARE | TF_ES_READWRITE;
+    // Queued for when the program lets go of its document. Not
+    // TF_ES_ASYNCDONTCARE: Chromium answers that with TS_E_SYNCHRONOUS
+    // while it holds the document itself (during its own key handling), and
+    // the edit is lost — the program's idea of the composition then drifts
+    // from ours until it ends it (the text left behind after a new line).
+    let queue = TF_ES_ASYNC | TF_ES_READWRITE;
+    let queued = |hr: windows::core::HRESULT| hr.is_ok() || hr == TF_S_ASYNC;
     unsafe {
         if sync {
-            let r = context.RequestEditSession(tid, &make(), TF_ES_SYNC | TF_ES_READWRITE);
-            match r {
+            match context.RequestEditSession(tid, &make(), TF_ES_SYNC | TF_ES_READWRITE) {
                 Ok(hr) if hr.is_ok() => return err.borrow_mut().take(),
-                Ok(hr) => {
-                    let r2 = context.RequestEditSession(tid, &make(), async_flags);
-                    return Some(format!("sync edit refused ({hr:?}), async -> {:?}", r2.map(|h| h.0)));
-                }
-                Err(e) => {
-                    let r2 = context.RequestEditSession(tid, &make(), async_flags);
-                    return Some(format!("sync edit request failed ({e}), async -> {:?}", r2.map(|h| h.0)));
-                }
+                // Refused now (Chromium, often): later, in order.
+                Ok(_) | Err(_) => {}
             }
         }
-        match context.RequestEditSession(tid, &make(), async_flags) {
-            Ok(hr) if hr.is_ok() || hr == TF_S_ASYNC => None,
-            Ok(hr) => Some(format!("async edit refused ({hr:?})")),
-            Err(e) => Some(format!("async edit request failed ({e})")),
+        match context.RequestEditSession(tid, &make(), queue) {
+            Ok(hr) if queued(hr) => None,
+            Ok(hr) => Some(format!("edit refused, also queued ({hr:?})")),
+            Err(e) => Some(format!("edit request failed ({e})")),
         }
     }
 }
@@ -422,6 +421,6 @@ impl ITfEditSession_Impl for Abort_Impl {
 pub fn abort(tid: u32, context: &ITfContext, composition: ITfComposition) {
     let es: ITfEditSession = Abort { composition }.into();
     unsafe {
-        let _ = context.RequestEditSession(tid, &es, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE);
+        let _ = context.RequestEditSession(tid, &es, TF_ES_ASYNC | TF_ES_READWRITE);
     }
 }

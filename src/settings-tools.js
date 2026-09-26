@@ -1045,6 +1045,7 @@ function renderIme() {
   const typing = card(
     row("每页候选个数", "", slider(st.page_size, 3, 9, 1, (v) => `${v} 个`, (v) => { st.page_size = v; imeSave(); })),
     row("Shift 切换中 / 英", "单按 Shift：把已经打的字母原样上屏并切到英文，再按一次回到中文", switchEl(st.shift_toggle, (on) => { st.shift_toggle = on; imeSave(); })),
+    row("Caps Lock 切到英文", "像 Mac 一样：大写锁定打开时是英文，字母打出来是小写（按住 Shift 是大写），数字和标点按键盘原样；关掉回到中文。关闭这个选项则大写锁定照常打大写字母", switchEl(st.caps_english !== false, (on) => { st.caps_english = on; imeSave(); })),
     row("括号、引号成对输入", "打出 （ 【 「 《 “ 这类符号时自动补上另一半，光标停在中间；再打右半边时直接跳过已经补上的那个", switchEl(st.auto_pair !== false, (on) => { st.auto_pair = on; imeSave(); })),
     row("Emoji 候选", "打「xiao」时在候选里给出 😄 之类", switchEl(st.emoji, (on) => { st.emoji = on; imeSave(); })),
     row("中日英混合输入", "不用切换：同一串字母同时按双拼、罗马字和英文单词解析，按词库和上下文把候选排在一起（日语标「日」、英文标「英」，句首英文自动大写）。关掉后默认只打中文，仍可用 /ja 或 Ctrl+Shift+J 切到日语", switchEl(st.mixed !== false, (on) => { st.mixed = on; imeSave(); }))
@@ -1083,7 +1084,7 @@ function renderIme() {
     <li><b>上屏英文</b>：打字时文字里带下划线的就是你按下的字母（候选窗第一行是它的双拼读音，如 rjhz · ran hou），Enter 原样上屏；词库里没有的英文词也会作为「英」排在候选最后，一样能选；Shift 上屏并切到英文</li>
     <li><b>中日混合</b>：直接按罗马字打日语（watashi → 私），中文、日语、英文候选排在一起；高亮落在日语词上时按 <b>↑ ↓</b> 竖着展开它的其他写法（汉字 / ひらがな / カタカナ …），展开后 <b>↑ ↓</b> 选、<b>← →</b> 翻页、空格上屏、Esc 收回；日语刚上屏后按 <b>\`</b> 在 原样 / ひらがな / カタカナ 之间切换；标点跟着正在打的这句话走：日语句子里 , . 是 、。，中文句子里（夹着英文单词也一样）是 ，。，纯英文句子是 , .</li>
     <li><b>切换</b>：Ctrl+Shift+J 轮换 中日混合 → 日本語 → 中文；或打 <b>/mix</b> <b>/ja</b> <b>/zh</b>（也可以 /hh /ry /zw）空格。每个程序记住自己的选择；F6–F10 日语假名 / 半角 / 英数转换</li>
-    <li><b>大写</b>：Caps Lock 打开后字母直接以大写输入；日式键盘上 Shift+逗号键 出 、</li>
+    <li><b>大写锁定</b>：默认打开时切到英文（小写，Shift 大写），关掉回到中文；设置里可改成照常打大写字母；日式键盘上 Shift+逗号键 出 、</li>
     <li><b>更多</b>：F4 或 Ctrl+\` 打开菜单（简繁、全角、Emoji）；按住 Shift 打大写字母开头：V 特殊符号、U 按 Unicode 编码、R 数字转大写金额、N 公历转农历；cC 开头是计算器；打 date / time / week 出当前日期、时间、星期</li></ol>`;
   parts.push(group("", card(help)));
   host.replaceChildren(...parts);
