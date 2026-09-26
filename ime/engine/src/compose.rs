@@ -96,6 +96,9 @@ pub struct Comp {
     en_leads: bool,
     /// ↑↓ on a Japanese candidate: its other spellings, in a column.
     expand: Option<Expand>,
+    /// The text the 颜文字 in `merged` were found for; one that does not
+    /// stand for all of it goes in after it (kaomoji::Found::whole).
+    kao_for: String,
 }
 
 /// A Japanese word's other spellings (converted in the spare Mozc session).
@@ -254,6 +257,11 @@ fn chain(first: State, then: State) -> State {
 impl Engine {
     /// Everything after the key: text committed, remember what we know.
     fn committed(&self, s: &mut Sess, text: &str, lang: Lang, code: &str) {
+        // 联想 learns what follows what, within a Chinese sentence.
+        if lang == Lang::Zh && s.last == Some(Lang::Zh) && self.predict_on() {
+            self.predictor.learn(&s.last_commit, text);
+        }
+        s.last_commit = text.to_string();
         match lang {
             Lang::Zh => {
                 if has_han(text) {
@@ -261,6 +269,8 @@ impl Engine {
                 }
                 s.last_ja = None;
             }
+            // A face changes nothing about the sentence.
+            Lang::Kao => {}
             Lang::Ja => s.last = Some(Lang::Ja),
             Lang::En => {
                 s.last = Some(Lang::En);
@@ -278,6 +288,7 @@ impl Engine {
             Lang::Zh => s.sentence[0] += text.chars().filter(|c| has_han(&c.to_string())).count() as u32,
             Lang::Ja => s.sentence[1] += text.chars().filter(|c| !c.is_ascii_punctuation() && !"、。「」？！・".contains(*c)).count() as u32,
             Lang::En => s.sentence[2] += text.chars().any(|c| c.is_ascii_alphanumeric()) as u32,
+            Lang::Kao => {}
         }
         if text.chars().last().map(|c| "。！？.!?\n".contains(c)).unwrap_or(false) {
             s.sentence = [0; 3];
@@ -348,6 +359,7 @@ impl Engine {
     }
 
     fn clear_comp(&self, s: &mut Sess) {
+        s.kao.clear();
         if s.rime != 0 {
             self.rime.clear(s.rime);
         }
@@ -360,6 +372,101 @@ impl Engine {
 
     /// One key from the DLL.
     pub(crate) fn key(&self, s: &mut Sess, session: u64, code: u32, m: u32) -> (State, UiOut) {
+        let up = m & mask::RELEASE != 0;
+        // 联想 on show: a digit picks one, Esc puts them away, and so does
+        // any other key (which then does what it always does).
+        let shown = !s.predict.is_empty();
+        if shown && !up && !is_modifier(code) {
+            if let Some(r) = self.predict_key(s, session, code, m) {
+                return r;
+            }
+            s.predict.clear();
+        }
+        let (st, mut ui) = self.key_inner(s, session, code, m);
+        if !s.predict.is_empty() {
+            // Still on show after a key-up or a lone modifier: those answer
+            // Hide only because nothing is being composed. Anything else
+            // they show (the 中 / 英 flash) takes their place.
+            match ui {
+                UiOut::Hide => ui = UiOut::Keep,
+                UiOut::Show(_) => s.predict.clear(),
+                UiOut::Keep => {}
+            }
+        } else if shown && matches!(ui, UiOut::Keep) {
+            ui = UiOut::Hide;
+        }
+        if !up {
+            ui = self.predict_after(s, session, &st, ui);
+        }
+        (st, ui)
+    }
+
+    fn predict_on(&self) -> bool {
+        self.settings.lock().map(|st| st.predict).unwrap_or(true)
+    }
+
+    fn kaomoji_on(&self) -> bool {
+        self.settings.lock().map(|st| st.kaomoji).unwrap_or(true)
+    }
+
+    /// A key while 联想 are on show; None: not one for them.
+    fn predict_key(&self, s: &mut Sess, session: u64, code: u32, m: u32) -> Option<(State, UiOut)> {
+        if code == ks::ESCAPE {
+            s.predict.clear();
+            return Some((eaten_with(None), UiOut::Hide));
+        }
+        // The digit row only: the keypad still types digits.
+        let d = char::from_u32(code)?.to_digit(10)? as usize;
+        if m & (mask::CONTROL | mask::ALT | mask::SHIFT) != 0 || d == 0 || d > s.predict.len() {
+            return None;
+        }
+        Some(self.pick_predicted(s, session, d - 1))
+    }
+
+    fn pick_predicted(&self, s: &mut Sess, session: u64, i: usize) -> (State, UiOut) {
+        let w = s.predict[i].clone();
+        s.predict.clear();
+        self.committed(s, &w, Lang::Zh, "");
+        let st = State { eaten: true, commit: Some(w), ..Default::default() };
+        let ui = self.predict_after(s, session, &st, UiOut::Hide);
+        (st, ui)
+    }
+
+    /// After Chinese went in and nothing is being typed: the words likely
+    /// to come next (predict.rs), instead of `ui`.
+    fn predict_after(&self, s: &mut Sess, session: u64, st: &State, ui: UiOut) -> UiOut {
+        let Some(text) = st.commit.as_ref() else { return ui };
+        if st.preedit.is_some() || s.last != Some(Lang::Zh) || !text.chars().last().map(crate::predict::is_han).unwrap_or(false) || !self.predict_on() {
+            return ui;
+        }
+        let idle = s.comp.is_none() && s.cmd.is_none() && !self.rime.snapshot(self.rime_session(s)).composing;
+        if !idle || self.rime_ascii(s) {
+            return ui;
+        }
+        let list = self.predictor.predict(&s.recent, &s.last_commit, self.page_size());
+        if list.is_empty() {
+            return ui;
+        }
+        s.predict = list;
+        self.predict_view(s, session)
+    }
+
+    fn predict_view(&self, s: &Sess, session: u64) -> UiOut {
+        if s.predict.is_empty() {
+            return UiOut::Hide;
+        }
+        UiOut::Show(View {
+            session,
+            preedit: "联想".into(),
+            labels: (1..=s.predict.len()).map(|i| i.to_string()).collect(),
+            candidates: s.predict.iter().map(|w| (w.clone(), String::new())).collect(),
+            highlighted: -1,
+            last_page: true,
+            ..Default::default()
+        })
+    }
+
+    fn key_inner(&self, s: &mut Sess, session: u64, code: u32, m: u32) -> (State, UiOut) {
         let up = m & mask::RELEASE != 0;
         let ctrl_alt = m & (mask::CONTROL | mask::ALT) != 0;
         let plain = !up && !ctrl_alt;
@@ -549,12 +656,52 @@ impl Engine {
             }
             return (State { eaten: false, commit, ..Default::default() }, UiOut::Hide);
         }
+        // The digit of a 颜文字 added after Rime's own candidates.
+        if m & (mask::RELEASE | mask::CONTROL | mask::ALT | mask::SHIFT) == 0 {
+            if let Some(d) = char::from_u32(code).and_then(|c| c.to_digit(10)).filter(|d| *d as usize > s.kao_base && *d as usize <= s.kao_base + s.kao.len()) {
+                return self.pick_kao_zh(s, session, d as usize - s.kao_base - 1);
+            }
+        }
         let eaten = self.rime.process_key(rs, code, m);
         let snap = self.rime.snapshot(rs);
         if let Some(c) = snap.commit.clone().filter(|c| !c.is_empty()) {
             self.committed(s, &c, Lang::Zh, "");
         }
-        (self.to_state(eaten, &snap), self.rime_ui(session, &snap))
+        (self.to_state(eaten, &snap), self.zh_ui(s, session, &snap))
+    }
+
+    /// Rime's candidates, and after them on its first page the 颜文字 for
+    /// its first one, as many as the digits have room for (at most two).
+    fn zh_ui(&self, s: &mut Sess, session: u64, snap: &crate::rime::Snapshot) -> UiOut {
+        s.kao.clear();
+        let mut ui = self.rime_ui(session, snap);
+        let picked = snap.preedit.as_ref().map(|p| has_han(&p.0)).unwrap_or(false);
+        if let (UiOut::Show(v), true, false) = (&mut ui, self.kaomoji_on(), picked) {
+            if v.page_no == 0 && !v.candidates.is_empty() && v.labels.len() < 9 {
+                let first = v.candidates[0].0.clone();
+                s.kao_base = v.labels.len();
+                for f in self.kaomoji.find(&first, (9 - v.labels.len()).min(2)) {
+                    v.labels.push((v.labels.len() + 1).to_string());
+                    v.candidates.push((f.face.clone(), "颜".into()));
+                    s.kao.push((f.face, if f.whole { String::new() } else { first.clone() }));
+                }
+            }
+        }
+        ui
+    }
+
+    /// A 颜文字 after Rime's candidates: it (after the text it was found
+    /// for, unless it stands for all of it) goes in, the rest is dropped.
+    fn pick_kao_zh(&self, s: &mut Sess, session: u64, i: usize) -> (State, UiOut) {
+        let _ = session;
+        let (face, before) = s.kao[i].clone();
+        self.clear_comp(s);
+        s.kao.clear();
+        if !before.is_empty() {
+            self.committed(s, &before, Lang::Zh, "");
+        }
+        self.committed(s, &face, Lang::Kao, "");
+        (State { eaten: true, commit: Some(format!("{before}{face}")), ..Default::default() }, UiOut::Hide)
     }
 
     // --- Commands --------------------------------------------------------------------
@@ -988,7 +1135,8 @@ impl Engine {
                 };
                 if s.comp.is_some() {
                     // A partial Chinese pick: the rest is still composing.
-                    return (first, self.rime_ui(session, &self.rime.snapshot(rs)));
+                    let snap = self.rime.snapshot(rs);
+                    return (first, self.zh_ui(s, session, &snap));
                 }
                 let (then, ui) = self.mixed_key(s, session, code, m);
                 (chain(first, then), ui)
@@ -1068,6 +1216,7 @@ impl Engine {
         let s_recent = s.recent.clone();
         let code = s.comp.as_ref().map(|c| c.code()).unwrap_or_default();
         let (zp, jp) = self.pref.lock().map(|p| p.get(&code)).unwrap_or((0, 0));
+        let kaomoji_on = self.kaomoji_on();
         let Some(comp) = s.comp.as_mut() else { return (eaten_with(None), UiOut::Hide) };
 
         let (zh_cands, zinfo) = if comp.zh {
@@ -1125,6 +1274,25 @@ impl Engine {
         if comp.keys.iter().all(|k| k.0.is_ascii_alphabetic()) && !code.is_empty() && !comp.merged.iter().any(|m| m.text == code) {
             let key = comp.merged.iter().filter(|m| m.lang == Lang::En).count() as i64;
             comp.merged.push(mixed::Merged { lang: Lang::En, key, text: code.clone(), comment: "英".into() });
+        }
+        // 颜文字 for what the first candidate says (中秋节快乐: the
+        // moon-viewing ones), right after it and its emoji, as an emoji is.
+        comp.kao_for.clear();
+        if kaomoji_on {
+            if let Some(first) = comp.merged.first().filter(|m| m.lang != Lang::En).map(|m| m.text.clone()) {
+                let mut found = self.kaomoji.find(&first, 3);
+                // A Japanese word: its reading too (ありがとう for 有難う).
+                if found.is_empty() && comp.ja && !comp.ja_view.preedit.is_empty() {
+                    found = self.kaomoji.find(&comp.ja_view.preedit, 3);
+                }
+                if !found.is_empty() {
+                    let at = 1 + comp.merged.iter().skip(1).take_while(|m| m.text.chars().all(|c| !c.is_alphanumeric())).count();
+                    for (n, f) in found.into_iter().enumerate() {
+                        comp.merged.insert(at + n, mixed::Merged { lang: Lang::Kao, key: f.whole as i64, text: f.face, comment: "颜".into() });
+                    }
+                    comp.kao_for = first;
+                }
+            }
         }
         // Words deleted with a right click for this input.
         if let Ok(h) = self.hidden.lock() {
@@ -1352,7 +1520,18 @@ impl Engine {
                     self.committed(s, &t, Lang::Zh, &code);
                 }
                 // Partly picked ("你 hao"): the rest continues in Rime alone.
-                (self.to_state(true, &snap), self.rime_ui(session, &snap))
+                (self.to_state(true, &snap), self.zh_ui(s, session, &snap))
+            }
+            Lang::Kao => {
+                // After the text it was found for, unless it stands for it.
+                let before = if item.key == 1 { String::new() } else { c.kao_for.clone() };
+                let lang = c.merged.first().map(|m| m.lang).filter(|l| *l == Lang::Ja).unwrap_or(Lang::Zh);
+                self.clear_comp(s);
+                if !before.is_empty() {
+                    self.committed(s, &before, lang, &code);
+                }
+                self.committed(s, &item.text, Lang::Kao, "");
+                (State { eaten: true, commit: Some(format!("{before}{}", item.text)), ..Default::default() }, UiOut::Hide)
             }
             Lang::En => {
                 self.clear_comp(s);
@@ -1380,13 +1559,23 @@ impl Engine {
     /// input again. The list is worked out anew; the spelling stays.
     pub(crate) fn forget(&self, s: &mut Sess, session: u64, index: usize) -> (State, UiOut) {
         let ps = self.page_size();
+        // A 联想 word: off this list.
+        if !s.predict.is_empty() && s.comp.is_none() {
+            if index < s.predict.len() {
+                s.predict.remove(index);
+            }
+            return (eaten_with(None), self.predict_view(s, session));
+        }
         match s.comp.as_ref().map(|c| (c.native, c.expand.is_some())) {
             // Rime alone: its own list, its own deletion (learned words).
             None => {
+                if index >= s.kao_base && !s.kao.is_empty() {
+                    return (eaten_with(None), UiOut::Keep);
+                }
                 let rs = self.rime_session(s);
                 self.rime.delete_on_page(rs, index);
                 let snap = self.rime.snapshot(rs);
-                (self.to_state(true, &snap), self.rime_ui(session, &snap))
+                (self.to_state(true, &snap), self.zh_ui(s, session, &snap))
             }
             Some((false, false)) => {
                 let Some(c) = s.comp.as_ref() else { return (eaten_with(None), UiOut::Keep) };
@@ -1403,7 +1592,7 @@ impl Engine {
                             let _ = m.delete_from_history(s.mozc, item.key as i32);
                         }
                     }
-                    Lang::En => {}
+                    Lang::En | Lang::Kao => {}
                 }
                 if let Ok(mut h) = self.hidden.lock() {
                     h.hide(&code, &item.text);
@@ -1437,7 +1626,23 @@ impl Engine {
     /// A click in the candidate window: `index` on the current page, or a
     /// page arrow.
     pub(crate) fn click(&self, s: &mut Sess, session: u64, index: Option<usize>, page: Option<bool>) -> (State, UiOut) {
+        let predicting = !s.predict.is_empty();
+        let (st, ui) = self.click_inner(s, session, index, page);
+        if predicting {
+            return (st, ui);
+        }
+        let ui = self.predict_after(s, session, &st, ui);
+        (st, ui)
+    }
+
+    fn click_inner(&self, s: &mut Sess, session: u64, index: Option<usize>, page: Option<bool>) -> (State, UiOut) {
         let ps = self.page_size();
+        if !s.predict.is_empty() && s.comp.is_none() {
+            return match index.filter(|i| *i < s.predict.len()) {
+                Some(i) => self.pick_predicted(s, session, i),
+                None => (eaten_with(None), UiOut::Keep),
+            };
+        }
         match s.comp.as_ref().map(|c| c.native) {
             // Mixed composition.
             Some(false) if s.comp.as_ref().map(|c| c.expand.is_some()).unwrap_or(false) => {
@@ -1464,6 +1669,9 @@ impl Engine {
             }
             // Rime alone.
             None => {
+                if let Some(i) = index.filter(|i| *i >= s.kao_base && *i < s.kao_base + s.kao.len()) {
+                    return self.pick_kao_zh(s, session, i - s.kao_base);
+                }
                 let rs = self.rime_session(s);
                 if let Some(i) = index {
                     self.rime.select_on_page(rs, i);
@@ -1475,7 +1683,7 @@ impl Engine {
                 if let Some(c) = snap.commit.clone().filter(|c| !c.is_empty()) {
                     self.committed(s, &c, Lang::Zh, "");
                 }
-                (self.to_state(true, &snap), self.rime_ui(session, &snap))
+                (self.to_state(true, &snap), self.zh_ui(s, session, &snap))
             }
         }
     }

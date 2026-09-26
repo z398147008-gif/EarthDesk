@@ -12,7 +12,9 @@
 //!   skipped the test.
 //! - Keys in a context that takes no text (edit::writable: Chrome while
 //!   the page's focus is not in a text field) are the program's: they go
-//!   to it untouched, the engine never sees them.
+//!   to it untouched, the engine never sees them. Except when Chrome left
+//!   the keyboard on its empty document although the page does have a text
+//!   field focused: they type into that field (edit::chrome_field).
 
 use crate::candwin;
 use crate::client::Client;
@@ -55,11 +57,14 @@ pub struct TextService {
     /// ← presses owed once the waiting edits are in (bracket pairs).
     left_after: Cell<u32>,
     /// An eaten key's answer, from OnTestKeyDown, for OnKeyDown to apply.
-    deferred: RefCell<Option<(State, edit::Adopt)>>,
+    /// (With the context it goes to: see `target`.)
+    deferred: RefCell<Option<(State, edit::Adopt, ITfContext)>>,
     /// The key whose release OnTestKeyUp handled (OnKeyUp then skips it).
     up_done: Cell<Option<u16>>,
-    /// Keys are going to a context that takes no text (logged once).
-    readonly_noted: Cell<bool>,
+    /// Where keys went last when the program's context takes no text (0:
+    /// it does; 1: passed to the program; 2: Chrome's field), logged once
+    /// per change.
+    readonly_noted: Cell<u8>,
     /// The preedit last put in the document (what an ended composition
     /// leaves behind).
     last_preedit: RefCell<Vec<u16>>,
@@ -88,7 +93,7 @@ impl TextService {
             orphan: RefCell::new(None),
             deferred: RefCell::new(None),
             up_done: Cell::new(None),
-            readonly_noted: Cell::new(false),
+            readonly_noted: Cell::new(0),
             retry: RefCell::new(std::collections::VecDeque::new()),
             retries: Cell::new(0),
             left_after: Cell::new(0),
@@ -429,19 +434,13 @@ impl TextService {
         // field, a password box): the key is the program's — a web app's
         // shortcut — and goes to it untouched. Eating it would start a
         // composition every edit of which the program refuses (TS_E_READONLY).
-        let Some(ctx) = context.filter(|c| edit::writable(c)) else {
-            if !up {
-                if !self.readonly_noted.replace(true) {
-                    self.note("keys in a context that takes no text: passed to the program");
-                }
-                if self.busy() {
-                    self.drop_typing();
-                }
+        let Some(ctx) = self.target(context, up) else {
+            if !up && self.busy() {
+                self.drop_typing();
             }
             return false;
         };
-        self.readonly_noted.set(false);
-        let context = Some(ctx);
+        let context = Some(&ctx);
         // The program cut our composition off since the last key: carry on
         // over its text if the caret is still right after it, else start
         // afresh.
@@ -491,7 +490,7 @@ impl TextService {
         // we want a key (Chromium answers TS_E_SYNCHRONOUS even to a queued
         // request then, and the edit is lost); in OnKeyDown TSF grants them.
         if defer && state.eaten && !up {
-            *self.deferred.borrow_mut() = Some((state, adopt));
+            *self.deferred.borrow_mut() = Some((state, adopt, ctx.clone()));
             return true;
         }
         self.finish(context, state, adopt, up)
@@ -530,6 +529,28 @@ impl TextService {
             }
         }
         state.eaten && !up
+    }
+
+    /// The context a key types into: the program's, if it takes text; when
+    /// it is Chrome's empty document, the page's focused field if it has one
+    /// (edit::chrome_field). None: the key is the program's.
+    fn target(&self, pic: Option<&ITfContext>, up: bool) -> Option<ITfContext> {
+        let pic = pic?;
+        if edit::writable(pic) {
+            self.readonly_noted.set(0);
+            return Some(pic.clone());
+        }
+        let tm = self.thread_mgr.borrow().clone();
+        let field = tm.and_then(|tm| edit::chrome_field(self.tid.get(), &tm, pic));
+        let how = if field.is_some() { 2 } else { 1 };
+        if !up && self.readonly_noted.replace(how) != how {
+            self.note(if field.is_some() {
+                "keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document"
+            } else {
+                "keys in a context that takes no text: passed to the program"
+            });
+        }
+        field
     }
 
     fn reset(&self) {
@@ -652,8 +673,8 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             self.up_done.set(None);
             if self.test_pending.replace(false) {
                 let deferred = self.deferred.borrow_mut().take();
-                if let Some((state, adopt)) = deferred {
-                    self.finish(pic.as_ref(), state, adopt, false);
+                if let Some((state, adopt, ctx)) = deferred {
+                    self.finish(Some(&ctx), state, adopt, false);
                 }
                 return Ok(true.into());
             }
@@ -668,8 +689,8 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             // release, or it will think the key is still held.
             // An edit still waiting (the program skipped OnKeyDown): now.
             let deferred = self.deferred.borrow_mut().take();
-            if let Some((state, adopt)) = deferred {
-                self.finish(pic.as_ref(), state, adopt, false);
+            if let Some((state, adopt, ctx)) = deferred {
+                self.finish(Some(&ctx), state, adopt, false);
             }
             self.process(pic.as_ref(), wparam, lparam, true, false);
             self.up_done.set(Some(wparam.0 as u16));
@@ -685,8 +706,8 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             if self.up_done.take() != Some(wparam.0 as u16) {
                 self.test_pending.set(false);
                 let deferred = self.deferred.borrow_mut().take();
-                if let Some((state, adopt)) = deferred {
-                    self.finish(pic.as_ref(), state, adopt, false);
+                if let Some((state, adopt, ctx)) = deferred {
+                    self.finish(Some(&ctx), state, adopt, false);
                 }
                 self.process(pic.as_ref(), wparam, lparam, true, false);
             }
