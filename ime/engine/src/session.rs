@@ -128,6 +128,7 @@ pub struct Engine {
     pub(crate) modes: Mutex<ModeMemory>,
     pub(crate) en: crate::mixed::EnDict,
     pub(crate) hidden: Mutex<crate::mixed::Hidden>,
+    pub(crate) enpref: Mutex<crate::mixed::EnPref>,
     look: Mutex<Look>,
 }
 
@@ -219,6 +220,7 @@ impl Engine {
             modes: Mutex::new(ModeMemory::load(&crate::paths::data_file("modes.json"))),
             en,
             hidden: Mutex::new(crate::mixed::Hidden::load(&crate::paths::data_file("hidden.json"))),
+            enpref: Mutex::new(crate::mixed::EnPref::load(&crate::paths::data_file("enpref.json"))),
             look: Mutex::new(Look::default()),
         }
     }

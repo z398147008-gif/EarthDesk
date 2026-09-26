@@ -365,6 +365,55 @@ pub fn insert_english(merged: &mut Vec<Merged>, words: &[String], se: f32, best_
     }
 }
 
+// --- English words the user picked --------------------------------------------------
+
+/// Per input (the letters as typed): how often an English word was picked
+/// for it, and the spelling picked last ("Inbox", "iPhone"). That spelling
+/// comes first from then on, capitals and all, wherever in the sentence;
+/// and English moves up the list with the habit. Kept in
+/// %APPDATA%\EarthDesk\ime\enpref.json.
+pub struct EnPref {
+    path: PathBuf,
+    map: HashMap<String, (u32, String)>,
+}
+
+impl EnPref {
+    pub fn load(path: &Path) -> EnPref {
+        let map = std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        EnPref { path: path.to_path_buf(), map }
+    }
+
+    pub fn get(&self, code: &str) -> Option<(u32, String)> {
+        self.map.get(&code.to_ascii_lowercase()).cloned()
+    }
+
+    pub fn record(&mut self, code: &str, spelling: &str) {
+        if code.len() < 2 || !spelling.eq_ignore_ascii_case(code) {
+            return;
+        }
+        let e = self.map.entry(code.to_ascii_lowercase()).or_insert((0, String::new()));
+        e.0 = e.0.saturating_add(1);
+        e.1 = spelling.to_string();
+        if let Ok(b) = serde_json::to_vec(&self.map) {
+            let tmp = self.path.with_extension("tmp");
+            if std::fs::write(&tmp, b).is_ok() {
+                let _ = std::fs::rename(&tmp, &self.path);
+            }
+        }
+    }
+}
+
+/// English with the user's habit: the learned spelling first, and a score
+/// raised by the share of picks that were English for this input (all of
+/// them: above anything else).
+pub fn en_learned(words: &mut Vec<String>, se: Option<f32>, learned: Option<(u32, String)>, zh_picks: u32, ja_picks: u32) -> Option<f32> {
+    let Some((n, spelling)) = learned.filter(|l| l.0 > 0) else { return se };
+    words.retain(|w| *w != spelling);
+    words.insert(0, spelling);
+    let share = n as f32 / (n + zh_picks + ja_picks) as f32;
+    Some(se.unwrap_or(1.9) + 3.0 * share)
+}
+
 // --- Candidates the user deleted ---------------------------------------------------
 
 /// Words the user removed with a right click, per input (the letters as
@@ -564,6 +613,26 @@ mod tests {
         assert_eq!(m[0].text, "Inbox");
         // "the" is weak against Chinese.
         assert!(en_score("the", true, None).unwrap() <= 1.4);
+    }
+
+    #[test]
+    fn english_habit() {
+        let p = std::env::temp_dir().join(format!("enpref-{}.json", std::process::id()));
+        let mut e = EnPref::load(&p);
+        e.record("inbox", "Inbox");
+        e.record("inbox", "韻母x"); // not a spelling of the letters: ignored
+        assert_eq!(e.get("inbox"), Some((1, "Inbox".to_string())));
+        assert_eq!(EnPref::load(&p).get("inbox"), Some((1, "Inbox".to_string())));
+        let _ = std::fs::remove_file(p);
+        // Picked once as English, never otherwise: English beats a strong
+        // Japanese reading (its score here 2.2 + 3.0), "Inbox" first.
+        let mut words = vec!["inbox".to_string()];
+        let se = en_learned(&mut words, en_score("inbox", true, None), Some((1, "Inbox".into())), 0, 0).unwrap();
+        assert_eq!(words, ["Inbox", "inbox"]);
+        assert!(se > 1.0 + 1.0 + 1.5 + 0.6);
+        // No habit: unchanged.
+        let mut words = vec!["inbox".to_string()];
+        assert_eq!(en_learned(&mut words, Some(2.2), None, 0, 0), Some(2.2));
     }
 
     #[test]
