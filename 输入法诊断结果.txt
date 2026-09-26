@@ -1,13 +1,14 @@
-﻿== 时间 2026-09-26 10:15:03  Windows Microsoft Windows NT 10.0.22631.0  ACP=932
+﻿== 时间 2026-09-26 10:27:22  Windows Microsoft Windows NT 10.0.22631.0  ACP=932
 == 安装目录 C:\Program Files\地球桌面\ime
               1  data
-        1077760  EarthDeskIME.exe
-         486400  EarthDeskTSF.dll
+        1081344  EarthDeskIME.exe
+         483840  EarthDeskTSF.dll
          479232  EarthDeskTSF.dll.old1
          479232  EarthDeskTSF.dll.old2
          483840  EarthDeskTSF.dll.old3
          483840  EarthDeskTSF.dll.old4
-         402944  EarthDeskTSF32.dll
+         486400  EarthDeskTSF.dll.old5
+         400896  EarthDeskTSF32.dll
        22523392  earthdesk_mozc.dll
              14  earthdesk_mozc.tag
           45041  ime.ico
@@ -19,13 +20,41 @@
          178616  vcruntime140.dll.old2
          178616  vcruntime140.dll.old3
          178616  vcruntime140.dll.old4
+         178616  vcruntime140.dll.old5
           50112  vcruntime140_1.dll
 == 正在运行的引擎
-   pid 30560  C:\Program Files\地球桌面\ime\EarthDeskIME.exe
+   pid 11936  C:\Program Files\地球桌面\ime\EarthDeskIME.exe
 == 注册表
    64 位: C:\Program Files\地球桌面\ime\EarthDeskTSF.dll
    Run:   "C:\Program Files\地球桌面\ime\EarthDeskIME.exe"
 == 最近两天引擎崩溃记录(系统「应用程序」日志)
+--- 09/26/2026 10:25:59  事件 1001
+   Fault bucket 1866063261097657421, type 4
+   Event Name: APPCRASH
+   Response: 不可用
+   Cab Id: 0
+   
+   Problem signature:
+   P1: EarthDeskIME.exe
+   P2: 0.0.0.0
+   P3: 6ab71b9d
+   P4: KERNELBASE.dll
+   P5: 10.0.22621.5547
+   P6: b7668ef9
+   P7: 0000087a
+   P8: 00000000000600ac
+--- 09/26/2026 10:25:56  事件 1000
+   Faulting application name: EarthDeskIME.exe, version: 0.0.0.0, time stamp: 0x6ab71b9d
+   Faulting module name: KERNELBASE.dll, version: 10.0.22621.5547, time stamp: 0xb7668ef9
+   Exception code: 0x0000087a
+   Fault offset: 0x00000000000600ac
+   Faulting process id: 0x0x7760
+   Faulting application start time: 0x0x1DD4D5461F4FF93
+   Faulting application path: C:\Program Files\地球桌面\ime\EarthDeskIME.exe
+   Faulting module path: C:\WINDOWS\System32\KERNELBASE.dll
+   Report Id: 9a4fe966-8720-48e3-89eb-72cb47bcd762
+   Faulting package full name:
+   Faulting package-relative application ID:
 --- 09/26/2026 10:14:09  事件 1001
    Fault bucket , type 0
    Event Name: APPCRASH
@@ -83,42 +112,15 @@
    P6: b7668ef9
    P7: 0000087a
    P8: 00000000000600ac
---- 09/26/2026 09:59:02  事件 1000
-   Faulting application name: EarthDeskIME.exe, version: 0.0.0.0, time stamp: 0x6ab7146a
-   Faulting module name: KERNELBASE.dll, version: 10.0.22621.5547, time stamp: 0xb7668ef9
-   Exception code: 0x0000087a
-   Fault offset: 0x00000000000600ac
-   Faulting process id: 0x0x3E08
-   Faulting application start time: 0x0x1DD4D5025FC2385
-   Faulting application path: C:\Program Files\地球桌面\ime\EarthDeskIME.exe
-   Faulting module path: C:\WINDOWS\System32\KERNELBASE.dll
-   Report Id: 140c3c06-f9df-4458-b63a-22665adc35fb
-   Faulting package full name:
-   Faulting package-relative application ID:
---- 09/26/2026 09:43:45  事件 1001
-   Fault bucket 1202283867363602553, type 4
-   Event Name: APPCRASH
-   Response: 不可用
-   Cab Id: 0
-   
-   Problem signature:
-   P1: EarthDeskIME.exe
-   P2: 0.0.0.0
-   P3: 6ab71082
-   P4: KERNELBASE.dll
-   P5: 10.0.22621.5547
-   P6: b7668ef9
-   P7: 0000087a
-   P8: 00000000000600ac
 == 引擎日志 %APPDATA%\EarthDesk\ime
             1  \mozc
             1  \rime
-        35331  \ime.log
+        38944  \ime.log
             1  \jis-keyboard
-         9588  \langpref.json
+         9933  \langpref.json
            27  \modes.json
           119  \settings.json
-          162  \weather.json
+          163  \weather.json
         80012  \mozc\boundary.db
          2060  \mozc\cform.db
        320012  \mozc\segment.db
@@ -147,40 +149,40 @@
      60789768  \rime\build\rime_ice.table.bin
         19582  \rime\rime_ice.userdb\000113.ldb
          8599  \rime\rime_ice.userdb\000115.ldb
-            0  \rime\rime_ice.userdb\000118.log
+         3704  \rime\rime_ice.userdb\000120.ldb
+            0  \rime\rime_ice.userdb\000123.log
            16  \rime\rime_ice.userdb\CURRENT
             0  \rime\rime_ice.userdb\LOCK
-            0  \rime\rime_ice.userdb\LOG
-   log: 1790384414 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
-   log: 1790384414 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
-   log: 1790384414 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
-   log: 1790384415 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
-   log: 1790384417 dll [chrome.exe]: program ended the composition (1 chars kept for the next key)
-   log: 1790384418 dll [chrome.exe]: cut-off composition (1 chars) not at the caret any more: dropped
-   log: 1790384418 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
-   log: 1790384423 dll [chrome.exe]: program ended the composition (1 chars kept for the next key)
-   log: 1790384428 dll [chrome.exe]: program ended the composition (1 chars kept for the next key)
-   log: 1790384428 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
-   log: 1790384431 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
-   log: 1790384438 dll [chrome.exe]: program ended the composition (1 chars kept for the next key)
-   log: 1790385245 regsvr32 /s /u C:\Program Files\地球桌面\ime\EarthDeskTSF.dll -> Some(0)
-   log: 1790385245 regsvr32 /s /u C:\Program Files\地球桌面\ime\EarthDeskTSF32.dll -> Some(0)
-   log: 1790385245 InstallLayoutOrTip remove=true -> true
-   log: 1790385246 engine stopped
-   log: 1790385269 regsvr32 /s C:\Program Files\地球桌面\ime\EarthDeskTSF.dll -> Some(0)
-   log: 1790385270 regsvr32 /s C:\Program Files\地球桌面\ime\EarthDeskTSF32.dll -> Some(0)
-   log: 1790385270 InstallLayoutOrTip remove=false -> true
-   log: 1790385270 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Roaming\EarthDesk\ime\rime
-   log: 1790385270 rime: deploy start
-   log: 1790385270 rime: deploy success
-   log: 1790385270 deploy (installer) finished
-   log: 1790385270 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Roaming\EarthDesk\ime\rime
-   log: 1790385271 mozc 24.11.oss
-   log: 1790385271 english words: 22519
-   log: 1790385271 listening on \\.\pipe\EarthDeskIME.2
-   log: 1790385283 rime: option _auto_commit
-   log: 1790385283 rime: option emoji
-   log: 1790385283 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790385981 InstallLayoutOrTip remove=false -> true
+   log: 1790385982 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Roaming\EarthDesk\ime\rime
+   log: 1790385982 rime: deploy start
+   log: 1790385982 rime: deploy success
+   log: 1790385982 deploy (installer) finished
+   log: 1790385982 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Roaming\EarthDesk\ime\rime
+   log: 1790385982 mozc 24.11.oss
+   log: 1790385982 english words: 22519
+   log: 1790385982 listening on \\.\pipe\EarthDeskIME.2
+   log: 1790386003 rime: option _auto_commit
+   log: 1790386003 rime: option emoji
+   log: 1790386003 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790386004 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
+   log: 1790386004 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
+   log: 1790386004 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
+   log: 1790386005 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
+   log: 1790386005 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
+   log: 1790386008 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
+   log: 1790386008 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
+   log: 1790386008 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
+   log: 1790386009 dll [chrome.exe]: sync edit refused (HRESULT(0x80040209)), async -> Ok(-2147220983)
+   log: 1790386010 rime: option _auto_commit
+   log: 1790386010 rime: option emoji
+   log: 1790386010 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790386013 rime: option _auto_commit
+   log: 1790386013 rime: option emoji
+   log: 1790386013 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790386034 rime: option _auto_commit
+   log: 1790386034 rime: option emoji
+   log: 1790386034 rime: schema double_pinyin_mspy/微软双拼
 == 试运行引擎:installed (C:\Program Files\地球桌面\ime)
    退出码  (0x)
    out:         n eaten=1 commit="" preedit="n" cands=*那 年 女 ♀ 难 n(日) 内
@@ -188,14 +190,14 @@
    out:         h eaten=1 commit="" preedit="nih" cands=*你会 你回 你还 你好 👋 二(日) 你和
    out:         k eaten=1 commit="" preedit="nihk" cands=*你好 👋 拟好 你 尼 泥 逆
    out:     space eaten=1 commit="你好" preedit="" cands=
-   log: 1790385303 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Local\Temp\edime-installed
-   log: 1790385303 rime: deploy start
-   log: 1790385315 rime: deploy success
-   log: 1790385315 mozc 24.11.oss
-   log: 1790385315 english words: 22303
-   log: 1790385315 rime: option _auto_commit
-   log: 1790385315 rime: option emoji
-   log: 1790385315 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790386042 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Local\Temp\edime-installed
+   log: 1790386042 rime: deploy start
+   log: 1790386054 rime: deploy success
+   log: 1790386054 mozc 24.11.oss
+   log: 1790386054 english words: 22303
+   log: 1790386054 rime: option _auto_commit
+   log: 1790386054 rime: option emoji
+   log: 1790386054 rime: schema double_pinyin_mspy/微软双拼
 == 试运行引擎:ascii (C:\Users\Public\edime-test)
    退出码  (0x)
    out:         n eaten=1 commit="" preedit="n" cands=*那 年 女 ♀ 难 n(日) 内
@@ -203,11 +205,11 @@
    out:         h eaten=1 commit="" preedit="nih" cands=*你会 你回 你还 你好 👋 二(日) 你和
    out:         k eaten=1 commit="" preedit="nihk" cands=*你好 👋 拟好 你 尼 泥 逆
    out:     space eaten=1 commit="你好" preedit="" cands=
-   log: 1790385316 librime 1.17.0 shared=C:\Users\Public\edime-test\data user=C:\Users\cheny\AppData\Local\Temp\edime-ascii
-   log: 1790385316 rime: deploy start
-   log: 1790385327 rime: deploy success
-   log: 1790385327 mozc 24.11.oss
-   log: 1790385327 english words: 22303
-   log: 1790385327 rime: option _auto_commit
-   log: 1790385327 rime: option emoji
-   log: 1790385327 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790386054 librime 1.17.0 shared=C:\Users\Public\edime-test\data user=C:\Users\cheny\AppData\Local\Temp\edime-ascii
+   log: 1790386054 rime: deploy start
+   log: 1790386066 rime: deploy success
+   log: 1790386066 mozc 24.11.oss
+   log: 1790386066 english words: 22303
+   log: 1790386066 rime: option _auto_commit
+   log: 1790386066 rime: option emoji
+   log: 1790386066 rime: schema double_pinyin_mspy/微软双拼
