@@ -867,18 +867,24 @@ impl Canvas {
         }
     }
 
-    /// Falling rain: thin streaks with a little wind.
+    /// Falling rain, in three depths like the desktop weather card
+    /// (wxsky.js): far drops short, faint and slow, near ones longer and
+    /// quicker. Speeds are in heights of the bar per second, so a drop
+    /// takes as long to cross it as one takes to cross the card's sky
+    /// (the near layer a little calmer: in a bar this low it would flicker).
     unsafe fn rain(&self, st: &Stretch, now: f32, s: f32, count: u32, len: f32, alpha: f32) {
+        const DEPTHS: [(f32, f32, f32); 3] = [(0.9, 0.65, 0.45), (1.35, 0.85, 0.7), (1.9, 1.0, 1.0)];
         let (w, h) = (st.w(), st.h());
-        let len = len * s;
         for j in 0..count {
             let q = st.seed * 31 + j * 17;
-            let speed = (170.0 + 90.0 * hash(q)) * s;
+            let (speed, size, strength) = DEPTHS[(j % 3) as usize];
+            let len = len * s * size;
+            let speed = speed * h * (0.9 + 0.2 * hash(q));
             let fall = h + len * 2.0;
             let y = st.r.top - len + (hash(q + 1) * fall + now * speed).rem_euclid(fall);
-            let x = st.r.left + w * hash(q + 2) - (y - st.r.top) * 0.22;
-            let a = alpha * (0.6 + 0.4 * hash(q + 3)) * st.fade(x);
-            self.streak((x, y), (x + len * 0.22, y - len), 1.25 * s, color(0x355f98, a), true);
+            let x = st.r.left + w * hash(q + 2) - (y - st.r.top) * 0.16;
+            let a = alpha * strength * (0.7 + 0.3 * hash(q + 3)) * st.fade(x);
+            self.streak((x, y), (x + len * 0.16, y - len), (0.9 + 0.35 * size) * s, color(0x355f98, a), true);
         }
     }
 

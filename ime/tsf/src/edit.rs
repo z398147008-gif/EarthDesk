@@ -28,20 +28,38 @@ pub struct Apply {
     on_caret: OnCaret,
     /// Text the program cut off from our composition (see `Orphan`): the
     /// composition starts again over it.
-    adopt: Option<ITfRange>,
+    adopt: Adopt,
+    ended: Ended,
     /// What went wrong inside the session, for the engine's log.
     err: Rc<RefCell<Option<String>>>,
 }
 
-/// What was left of our composition when the program ended it (Chromium
-/// apps do after Enter re-renders the text box): its text is still there,
-/// underlined no more. If the caret has not moved away when the next key
-/// comes, the composition picks it up again as if nothing happened;
-/// otherwise the engine forgets it.
+/// What was left of our composition when the program ended it (web apps
+/// do when the first text on a new line re-renders the box): its text is
+/// still there, underlined no more. If it is still right before the caret
+/// when the next key comes, the composition takes it over again as if
+/// nothing happened; otherwise the engine forgets it.
 pub struct Orphan {
-    pub range: ITfRange,
+    /// The preedit we last put there.
     pub text: Vec<u16>,
+    pub at: std::time::Instant,
 }
+
+/// How the next edit starts its composition when there is none.
+#[derive(Clone)]
+pub enum Adopt {
+    /// At the selection, as usual.
+    No,
+    /// Over this range (the orphan, found just now).
+    Range(ITfRange),
+    /// Over this text if it is right before the caret (looked for inside
+    /// the edit, for programs that refuse to be asked beforehand).
+    Find(Vec<u16>),
+}
+
+/// Counts compositions the program ended, so an edit session during which
+/// ours was ended does not keep using it.
+pub type Ended = Rc<std::cell::Cell<u32>>;
 
 unsafe fn range_text(ec: u32, range: &ITfRange, max: usize) -> Result<Vec<u16>> {
     let mut buf = vec![0u16; max + 1];
@@ -51,43 +69,60 @@ unsafe fn range_text(ec: u32, range: &ITfRange, max: usize) -> Result<Vec<u16>> 
     Ok(buf)
 }
 
-impl Orphan {
-    /// Inside OnCompositionTerminated (whose cookie can read).
-    pub unsafe fn take(ec: u32, comp: &ITfComposition) -> Option<Orphan> {
-        let range = comp.GetRange().ok()?.Clone().ok()?;
-        let text = range_text(ec, &range, 256).ok()?;
-        (!text.is_empty()).then_some(Orphan { range, text })
+/// `text` right before an empty selection: its range. Positions are taken
+/// from the caret, not from the old composition's range, which programs
+/// shift about when they rebuild the text box.
+unsafe fn before_caret(ctx: &ITfContext, ec: u32, text: &[u16]) -> Option<ITfRange> {
+    let sel = selection_range(ctx, ec).ok()?;
+    if !sel.IsEmpty(ec).ok()?.as_bool() {
+        return None;
     }
+    let r = sel.Clone().ok()?;
+    let n = text.len() as i32;
+    let mut moved = 0i32;
+    r.ShiftStart(ec, -n, &mut moved, std::ptr::null()).ok()?;
+    if moved != -n {
+        return None;
+    }
+    (range_text(ec, &r, text.len() + 2).ok()? == text).then_some(r)
+}
+
+pub enum Found {
+    Here(ITfRange),
+    Gone,
+    /// The program would not let us look now.
+    Refused,
 }
 
 #[implement(ITfEditSession)]
 struct Check {
     context: ITfContext,
-    range: ITfRange,
     text: Vec<u16>,
-    ok: Rc<RefCell<bool>>,
+    out: Rc<RefCell<Option<ITfRange>>>,
 }
 
 impl ITfEditSession_Impl for Check_Impl {
     fn DoEditSession(&self, ec: u32) -> Result<()> {
         crate::guard(Ok(()), || unsafe {
-            let same = range_text(ec, &self.range, self.text.len() + 8)? == self.text;
-            let sel = selection_range(&self.context, ec)?;
-            let here = sel.IsEmpty(ec)?.as_bool() && sel.IsEqualStart(ec, &self.range, TF_ANCHOR_END)?.as_bool();
-            *self.ok.borrow_mut() = same && here;
+            *self.out.borrow_mut() = before_caret(&self.context, ec, &self.text);
             Ok(())
         })
     }
 }
 
-/// Is the orphaned text still there, with the caret right after it?
-pub fn still_here(tid: u32, context: &ITfContext, orphan: &Orphan) -> bool {
-    let ok = Rc::new(RefCell::new(false));
-    let es: ITfEditSession = Check { context: context.clone(), range: orphan.range.clone(), text: orphan.text.clone(), ok: ok.clone() }.into();
+/// Is the orphaned text still right before the caret?
+pub fn find_orphan(tid: u32, context: &ITfContext, text: &[u16]) -> Found {
+    let out = Rc::new(RefCell::new(None));
+    let es: ITfEditSession = Check { context: context.clone(), text: text.to_vec(), out: out.clone() }.into();
     let r = unsafe { context.RequestEditSession(tid, &es, TF_ES_SYNC | TF_ES_READ) };
-    let done = matches!(r, Ok(hr) if hr.is_ok());
-    let ok = *ok.borrow();
-    done && ok
+    if !matches!(r, Ok(hr) if hr.is_ok()) {
+        return Found::Refused;
+    }
+    let found = out.borrow_mut().take();
+    match found {
+        Some(r) => Found::Here(r),
+        None => Found::Gone,
+    }
 }
 
 unsafe fn selection_range(ctx: &ITfContext, ec: u32) -> Result<ITfRange> {
@@ -145,7 +180,14 @@ impl Apply {
         // Taken out and put back so no borrow is held while TSF calls back
         // into us (OnCompositionTerminated).
         let mut comp = self.composition.try_borrow_mut().ok().and_then(|mut c| c.take());
+        let ended = self.ended.get();
         let r = self.edit(ec, &mut comp);
+        // The program ended the composition while we were editing (some do
+        // it right as the first text of a line arrives): it is dead, never
+        // put it back (every later edit would fail on it).
+        if self.ended.get() != ended {
+            comp = None;
+        }
         if let Ok(mut slot) = self.composition.try_borrow_mut() {
             *slot = comp;
         }
@@ -155,10 +197,23 @@ impl Apply {
     unsafe fn edit(&self, ec: u32, comp: &mut Option<ITfComposition>) -> Result<()> {
         let ctx = &self.context;
 
-        if let (None, Some(range)) = (comp.as_ref(), &self.adopt) {
-            // Whatever comes now (a longer spelling, the word, or nothing
-            // after Esc) replaces the text that was cut off.
-            *comp = Some(ctx.cast::<ITfContextComposition>()?.StartComposition(ec, range, &self.sink)?);
+        if comp.is_none() {
+            let range = match &self.adopt {
+                Adopt::No => None,
+                Adopt::Range(r) => Some(r.clone()),
+                Adopt::Find(text) => {
+                    let r = before_caret(ctx, ec, text);
+                    if let Ok(mut slot) = self.err.try_borrow_mut() {
+                        *slot = Some(format!("cut-off composition ({} chars) {}", text.len(), if r.is_some() { "taken over in the edit" } else { "no longer at the caret" }));
+                    }
+                    r
+                }
+            };
+            if let Some(range) = range {
+                // Whatever comes now (a longer spelling, the word, or
+                // nothing after Esc) replaces the text that was cut off.
+                *comp = Some(ctx.cast::<ITfContextComposition>()?.StartComposition(ec, &range, &self.sink)?);
+            }
         }
 
         if let Some(text) = &self.state.commit {
@@ -249,7 +304,8 @@ pub fn apply(
     attr: Option<i32>,
     sync: bool,
     on_caret: OnCaret,
-    adopt: Option<ITfRange>,
+    adopt: Adopt,
+    ended: &Ended,
 ) -> Option<String> {
     let err: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let make = || -> ITfEditSession {
@@ -261,6 +317,7 @@ pub fn apply(
             attr,
             on_caret: on_caret.clone(),
             adopt: adopt.clone(),
+            ended: ended.clone(),
             err: err.clone(),
         }
         .into()
