@@ -33,6 +33,8 @@
 ;  .exe in ime\ is moved aside (name.old1, .old2 ...) and deleted now if
 ;  possible, otherwise later (see above). The new files go in cleanly and no
 ;  restart is ever needed: programs opened from now on load the new ones.
+Var EarthDeskImeInUse
+
 !macro EARTHDESK_IME_MOVE_ASIDE_ALL ID
   Delete "$INSTDIR\ime\*.old*"
   FindFirst $R2 $R3 "$INSTDIR\ime\*.*"
@@ -51,6 +53,10 @@
       ; restart); EarthDesk deletes leftovers when it next starts, and the
       ; next installer tries again.
       Delete "$INSTDIR\ime\$R3.old$R1"
+      ; Still there: some program has the old one loaded (and keeps it until
+      ; it is reopened). Said once at the end of the install.
+      IfFileExists "$INSTDIR\ime\$R3.old$R1" 0 +2
+        StrCpy $EarthDeskImeInUse 1
     ime_all_next_${ID}:
     FindNext $R2 $R3
     Goto ime_all_loop_${ID}
@@ -152,6 +158,12 @@ FunctionEnd
   nsExec::Exec 'taskkill /F /IM SearchHost.exe'
   nsExec::Exec 'taskkill /F /IM SearchApp.exe'
   nsExec::Exec 'taskkill /F /IM StartMenuExperienceHost.exe'
+  ; Programs that were open (Chrome, Claude, WeChat ...) still have the old
+  ; input method loaded; they pick up the new one when reopened.
+  StrCmp $EarthDeskImeInUse 1 0 ime_in_use_done
+    IfSilent ime_in_use_done
+    MessageBox MB_OK|MB_ICONINFORMATION "输入法已更新。$\r$\n$\r$\n安装前就打开着的程序（Chrome、Edge、Claude、微信等）还在用旧版输入法，请把它们完全关闭（Chrome 要在右下角托盘里也退出）再重新打开，新版本才会生效。"
+  ime_in_use_done:
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

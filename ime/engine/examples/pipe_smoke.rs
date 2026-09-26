@@ -10,7 +10,7 @@ fn main() {
         read_frame(&mut f).unwrap()
     };
     println!("{:?}", call(Request::Status));
-    let Reply::Hello { session, .. } = call(Request::Hello { version: VERSION, pid: 1, exe: "notepad.exe".into(), notify: 0, draws: false }) else { panic!("hello") };
+    let Reply::Hello { session, .. } = call(Request::Hello { version: VERSION, pid: 1, exe: "notepad.exe".into(), notify: 0, draws: false, build: String::new() }) else { panic!("hello") };
     for c in "wojntm".chars() {
         println!("{c:?} {:?}", call(Request::Key { session, keycode: c as u32, mask: 0 }));
     }

@@ -100,13 +100,16 @@ void main() {
   }
 
   // Rain: three depths of slanted streaks, the near ones longer and faster.
+  // Speeds in card heights per second, the same as the input method's
+  // weather bar (0.9 / 1.4 / 1.9): a drop takes as long to cross either.
   if (uRain > 0.0) {
     for (int i = 0; i < 3; i++) {
       float fi = float(i);
       float cols = 34.0 - fi * 9.0;
       vec2 rp = p;
       rp.x += rp.y * 0.16;                       // wind slant
-      vec2 g = vec2(rp.x * cols, rp.y * (3.2 - fi * 0.8) + t * (3.0 + fi * 1.2));
+      float ys = 3.2 - fi * 0.8;
+      vec2 g = vec2(rp.x * cols, rp.y * ys + t * (0.9 + fi * 0.5) * ys);
       float cid = floor(g.x);
       float off = hash(vec2(cid, fi * 11.0));
       float y = fract(g.y + off * 7.0);
@@ -216,7 +219,7 @@ function flatten(s) {
 
 /// Starts the animation on `canvas`. Returns `{ set(code, isDay) }`, or null
 /// when WebGL2 is unavailable (the card then keeps its plain tint).
-export function createSky(canvas, { fps = 30 } = {}) {
+export function createSky(canvas, { fps = 60 } = {}) {
   const gl = canvas.getContext("webgl2", { antialias: false, alpha: false, preserveDrawingBuffer: false });
   if (!gl) return null;
 
@@ -274,13 +277,12 @@ export function createSky(canvas, { fps = 30 } = {}) {
   const start = performance.now();
   let last = 0;
   let lastFrame = 0;
-  // The clouds drift a few pixels a second, so a calm sky needs only a
-  // handful of frames; rain, snow and lightning get a smooth rate, and a
-  // weather change eases in at the higher rate too. Every frame of a
-  // transparent widget makes Windows recompose it over the desktop, so this
-  // matters more than the shader's own cost.
-  const calmGap = 1000 / 8;
-  const busyGap = 1000 / Math.min(fps, 24);
+  // Rain, snow, lightning and a weather change easing in get the display's
+  // full rate (60); a calm sky with only drifting clouds half of it. Rates
+  // that do not divide the refresh rate (24 on 60 Hz) judder: frames come
+  // two and three refreshes apart by turns.
+  const calmGap = 1000 / Math.max(1, Math.round(fps / 2));
+  const busyGap = 1000 / fps;
   let hidden = document.hidden;
   document.addEventListener("visibilitychange", () => {
     hidden = document.hidden;
@@ -296,7 +298,9 @@ export function createSky(canvas, { fps = 30 } = {}) {
         return Array.isArray(tv) ? tv.some((v, i) => Math.abs(v - cv[i]) > 0.01) : Math.abs(tv - cv) > 0.01;
       });
     const minGap = busy ? busyGap : calmGap;
-    if (now - lastFrame < minGap - 1) return;
+    // A few ms of slack: requestAnimationFrame at 60 Hz arrives 16.4–16.9 ms
+    // apart, and a strict gate would drop every other frame.
+    if (now - lastFrame < minGap - 3) return;
     const dt = Math.min(0.2, (now - (last || now)) / 1000);
     last = now;
     lastFrame = now;

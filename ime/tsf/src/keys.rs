@@ -196,3 +196,37 @@ pub fn convert(vk: u16, lparam: isize, up: bool) -> Option<Key> {
     }
     None
 }
+
+/// Move the caret `n` characters left the way the user would, with ←
+/// (between a pair of brackets just put in: （|）). Programs differ in
+/// whether they honour a caret the input method sets while committing
+/// (Chromium puts it after the text), but every one moves on ←. Marked as
+/// ours (INJECTED), so the text service lets it through untouched. Shift is
+/// let go first: （ is typed with it held, and Shift+← would select.
+pub fn caret_left(n: u32) {
+    let key = |vk: VIRTUAL_KEY, up: bool, extended: bool| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: (if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) }) | (if extended { KEYEVENTF_EXTENDEDKEY } else { KEYBD_EVENT_FLAGS(0) }),
+                time: 0,
+                dwExtraInfo: ime_proto::INJECTED,
+            },
+        },
+    };
+    let mut inputs = Vec::new();
+    for vk in [VK_LSHIFT, VK_RSHIFT] {
+        if unsafe { GetAsyncKeyState(vk.0 as i32) } as u16 & 0x8000 != 0 {
+            inputs.push(key(vk, true, vk == VK_RSHIFT));
+        }
+    }
+    for _ in 0..n.min(8) {
+        inputs.push(key(VK_LEFT, false, true));
+        inputs.push(key(VK_LEFT, true, true));
+    }
+    unsafe {
+        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+    }
+}

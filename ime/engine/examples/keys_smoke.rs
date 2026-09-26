@@ -10,7 +10,7 @@ fn main() {
         write_frame(&mut f, &r).unwrap();
         read_frame(&mut f).unwrap()
     };
-    let Reply::Hello { session, .. } = call(Request::Hello { version: VERSION, pid: 1, exe: "notepad.exe".into(), notify: 0, draws: false }) else { panic!() };
+    let Reply::Hello { session, .. } = call(Request::Hello { version: VERSION, pid: 1, exe: "notepad.exe".into(), notify: 0, draws: false, build: String::new() }) else { panic!() };
     call(Request::Focus { session, on: true });
     call(Request::Caret { session, x: 100, y: 100, h: 20 });
     let mut it = keys.chars();
