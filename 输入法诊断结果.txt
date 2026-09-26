@@ -1,7 +1,7 @@
-﻿== 时间 2026-09-26 11:16:01  Windows Microsoft Windows NT 10.0.22631.0  ACP=932
+﻿== 时间 2026-09-26 11:47:53  Windows Microsoft Windows NT 10.0.22631.0  ACP=932
 == 安装目录 C:\Program Files\地球桌面\ime
               1  data
-        1134592  EarthDeskIME.exe
+        1140224  EarthDeskIME.exe
          504320  EarthDeskTSF.dll
          415232  EarthDeskTSF32.dll
        22523392  earthdesk_mozc.dll
@@ -13,7 +13,7 @@
          178616  vcruntime140.dll
           50112  vcruntime140_1.dll
 == 正在运行的引擎
-   pid 9008  C:\Program Files\地球桌面\ime\EarthDeskIME.exe
+   pid 20128  C:\Program Files\地球桌面\ime\EarthDeskIME.exe
 == 注册表
    64 位: C:\Program Files\地球桌面\ime\EarthDeskTSF.dll
    Run:   "C:\Program Files\地球桌面\ime\EarthDeskIME.exe"
@@ -105,10 +105,11 @@
 == 引擎日志 %APPDATA%\EarthDesk\ime
             1  \mozc
             1  \rime
+           61  \enpref.json
            51  \hidden.json
-        54617  \ime.log
+        59976  \ime.log
             1  \jis-keyboard
-        11443  \langpref.json
+        11561  \langpref.json
            27  \modes.json
           119  \settings.json
           163  \weather.json
@@ -140,39 +141,38 @@
      60789768  \rime\build\rime_ice.table.bin
         26375  \rime\rime_ice.userdb\000132.ldb
          4804  \rime\rime_ice.userdb\000136.ldb
-            0  \rime\rime_ice.userdb\000147.log
-           16  \rime\rime_ice.userdb\CURRENT
-            0  \rime\rime_ice.userdb\LOCK
-   log: 1790388860 regsvr32 /s C:\Program Files\地球桌面\ime\EarthDeskTSF.dll -> Some(0)
-   log: 1790388860 regsvr32 /s C:\Program Files\地球桌面\ime\EarthDeskTSF32.dll -> Some(0)
-   log: 1790388860 InstallLayoutOrTip remove=false -> true
-   log: 1790388860 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Roaming\EarthDesk\ime\rime
-   log: 1790388860 rime: deploy start
-   log: 1790388861 rime: deploy success
-   log: 1790388861 deploy (installer) finished
-   log: 1790388861 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Roaming\EarthDesk\ime\rime
-   log: 1790388861 mozc 24.11.oss
-   log: 1790388861 english words: 22519
-   log: 1790388861 listening on \\.\pipe\EarthDeskIME.4
-   log: 1790388873 rime: option _auto_commit
-   log: 1790388873 rime: option emoji
-   log: 1790388873 rime: schema double_pinyin_mspy/微软双拼
-   log: 1790388873 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
-   log: 1790388877 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
-   log: 1790388884 engine stopped
-   log: 1790388913 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Roaming\EarthDesk\ime\rime
-   log: 1790388913 mozc 24.11.oss
-   log: 1790388913 english words: 22519
-   log: 1790388913 listening on \\.\pipe\EarthDeskIME.5
-   log: 1790388937 rime: option _auto_commit
-   log: 1790388937 rime: option emoji
-   log: 1790388937 rime: schema double_pinyin_mspy/微软双拼
-   log: 1790388937 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
-   log: 1790388940 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
-   log: 1790388944 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
-   log: 1790388952 rime: option _auto_commit
-   log: 1790388952 rime: option emoji
-   log: 1790388952 rime: schema double_pinyin_mspy/微软双拼
+         2085  \rime\rime_ice.userdb\000149.ldb
+          168  \rime\rime_ice.userdb\000154.ldb
+   log: 1790390735 mozc 24.11.oss
+   log: 1790390735 english words: 22519
+   log: 1790390735 listening on \\.\pipe\EarthDeskIME.5
+   log: 1790390775 rime: option _auto_commit
+   log: 1790390775 rime: option emoji
+   log: 1790390775 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790390776 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790390779 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790390783 dll [chrome.exe]: edits still refused (HRESULT(0x80040209)): dropped
+   log: 1790390789 rime: option _auto_commit
+   log: 1790390789 rime: option emoji
+   log: 1790390789 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790390790 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790390794 dll [explorer.exe] is build e115d02-202609261110, engine e89a9a1-202609261140: the program needs reopening
+   log: 1790390794 rime: option _auto_commit
+   log: 1790390794 rime: option emoji
+   log: 1790390794 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790390802 engine stopped
+   log: 1790390836 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Roaming\EarthDesk\ime\rime
+   log: 1790390836 mozc 24.11.oss
+   log: 1790390836 english words: 22519
+   log: 1790390836 listening on \\.\pipe\EarthDeskIME.6
+   log: 1790390849 rime: option _auto_commit
+   log: 1790390849 rime: option emoji
+   log: 1790390849 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790390849 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790390852 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790390856 rime: option _auto_commit
+   log: 1790390856 rime: option emoji
+   log: 1790390856 rime: schema double_pinyin_mspy/微软双拼
 == 试运行引擎:installed (C:\Program Files\地球桌面\ime)
    退出码  (0x)
    out:         n eaten=1 commit="" preedit="n" cands=*那 年 女 ♀ 难 n(日) 内
@@ -180,14 +180,14 @@
    out:         h eaten=1 commit="" preedit="nih" cands=*你会 你回 你还 你好 👋 二(日) 你和
    out:         k eaten=1 commit="" preedit="nihk" cands=*你好 👋 拟好 你 尼 泥 逆
    out:     space eaten=1 commit="你好" preedit="" cands=
-   log: 1790388962 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Local\Temp\edime-installed
-   log: 1790388962 rime: deploy start
-   log: 1790388974 rime: deploy success
-   log: 1790388974 mozc 24.11.oss
-   log: 1790388974 english words: 22303
-   log: 1790388974 rime: option _auto_commit
-   log: 1790388974 rime: option emoji
-   log: 1790388974 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790390873 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Local\Temp\edime-installed
+   log: 1790390873 rime: deploy start
+   log: 1790390885 rime: deploy success
+   log: 1790390885 mozc 24.11.oss
+   log: 1790390885 english words: 22303
+   log: 1790390885 rime: option _auto_commit
+   log: 1790390885 rime: option emoji
+   log: 1790390885 rime: schema double_pinyin_mspy/微软双拼
 == 试运行引擎:ascii (C:\Users\Public\edime-test)
    退出码  (0x)
    out:         n eaten=1 commit="" preedit="n" cands=*那 年 女 ♀ 难 n(日) 内
@@ -195,11 +195,11 @@
    out:         h eaten=1 commit="" preedit="nih" cands=*你会 你回 你还 你好 👋 二(日) 你和
    out:         k eaten=1 commit="" preedit="nihk" cands=*你好 👋 拟好 你 尼 泥 逆
    out:     space eaten=1 commit="你好" preedit="" cands=
-   log: 1790388975 librime 1.17.0 shared=C:\Users\Public\edime-test\data user=C:\Users\cheny\AppData\Local\Temp\edime-ascii
-   log: 1790388975 rime: deploy start
-   log: 1790388986 rime: deploy success
-   log: 1790388986 mozc 24.11.oss
-   log: 1790388986 english words: 22303
-   log: 1790388986 rime: option _auto_commit
-   log: 1790388986 rime: option emoji
-   log: 1790388986 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790390886 librime 1.17.0 shared=C:\Users\Public\edime-test\data user=C:\Users\cheny\AppData\Local\Temp\edime-ascii
+   log: 1790390886 rime: deploy start
+   log: 1790390898 rime: deploy success
+   log: 1790390898 mozc 24.11.oss
+   log: 1790390898 english words: 22303
+   log: 1790390899 rime: option _auto_commit
+   log: 1790390899 rime: option emoji
+   log: 1790390899 rime: schema double_pinyin_mspy/微软双拼
