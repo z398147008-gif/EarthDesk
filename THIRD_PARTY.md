@@ -58,6 +58,7 @@
 | OpenCC 数据(`ime/data/opencc/`,简繁转换) | 随 librime 1.17.0 依赖包 | Apache-2.0 | https://github.com/BYVoid/OpenCC |
 
 | Mozc 转换引擎(`ime/earthdesk_mozc.dll`,日语输入;由本仓库 GitHub Actions 从源码编译,内含 Mozc 的 OSS 词典数据) | commit 13c9898 | BSD-3-Clause(词典数据各按其许可,见 Mozc 源码 `src/data/dictionary_oss/README.txt`) | https://github.com/google/mozc |
+| Mozc 颜文字数据(`src/data/emoticon/emoticon.tsv`、`categorized.tsv`,由 `tools/ime-kaomoji/mkkaomoji.py` 合进 `ime/engine/data/kaomoji.tsv`,编进 `EarthDeskIME.exe`) | master | BSD-3-Clause | https://github.com/google/mozc |
 | Microsoft Visual C++ 运行库(`msvcp140.dll` 等,随 `earthdesk_mozc.dll` 放在同目录) | 随构建机 | Microsoft 可再发行组件许可 | — |
 
 构建时 `tools/fetch-ime.ps1` 还会临时下载 7-Zip 的 `7zr.exe`(LGPL-2.1)用来解压 librime 的发行包,

@@ -1045,7 +1045,9 @@ function renderIme() {
   const typing = card(
     row("每页候选个数", "", slider(st.page_size, 3, 9, 1, (v) => `${v} 个`, (v) => { st.page_size = v; imeSave(); })),
     row("Shift 切换中 / 英", "单按 Shift：把已经打的字母原样上屏并切到英文，再按一次回到中文", switchEl(st.shift_toggle, (on) => { st.shift_toggle = on; imeSave(); })),
-    row("Caps Lock 切到英文", "像 Mac 一样：大写锁定打开时是英文，字母打出来是小写（按住 Shift 是大写），数字和标点按键盘原样；关掉回到中文。关闭这个选项则大写锁定照常打大写字母", switchEl(st.caps_english !== false, (on) => { st.caps_english = on; imeSave(); })),
+    row("Caps Lock 切到英文", "默认关：大写锁定照常锁定大写字母（中 / 英用 Shift 切换）。打开则像 Mac 一样：大写锁定打开时是英文，字母打出来是小写（按住 Shift 是大写），数字和标点按键盘原样；关掉回到中文", switchEl(st.caps_english === true, (on) => { st.caps_english = on; imeSave(); })),
+    row("联想输入", "上屏一个中文词后，候选窗接着给出下一个可能要打的词（先按你自己打过的顺序，再按词库里的常用搭配），按数字键选，打别的键就收起。这时要打数字请用小键盘，或者关掉这一项", switchEl(st.predict !== false, (on) => { st.predict = on; imeSave(); })),
+    row("颜文字", "像 Emoji 一样：打「开心」「晚安」「中秋节快乐」「ありがとう」时，候选里给出日本常用的相关颜文字（标「颜」）。一个词时替换这个词，一整句时接在句子后面", switchEl(st.kaomoji !== false, (on) => { st.kaomoji = on; imeSave(); })),
     row("括号、引号成对输入", "打出 （ 【 「 《 “ 这类符号时自动补上另一半，光标停在中间；再打右半边时直接跳过已经补上的那个", switchEl(st.auto_pair !== false, (on) => { st.auto_pair = on; imeSave(); })),
     row("Emoji 候选", "打「xiao」时在候选里给出 😄 之类", switchEl(st.emoji, (on) => { st.emoji = on; imeSave(); })),
     row("中日英混合输入", "不用切换：同一串字母同时按双拼、罗马字和英文单词解析，按词库和上下文把候选排在一起（日语标「日」、英文标「英」，句首英文自动大写）。关掉后默认只打中文，仍可用 /ja 或 Ctrl+Shift+J 切到日语", switchEl(st.mixed !== false, (on) => { st.mixed = on; imeSave(); }))

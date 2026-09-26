@@ -136,6 +136,71 @@ pub fn find_orphan(tid: u32, context: &ITfContext, text: &[u16]) -> Found {
     }
 }
 
+/// Can text go into this context at all? Programs point the keyboard at
+/// contexts that take none while nothing editable has the focus: Chrome at
+/// its "empty" document (read-only, keyboard disabled) whenever the page's
+/// focus is not in a text field, and its password fields are disabled for
+/// input methods. Every edit there fails (TS_E_READONLY), so keys there are
+/// the program's (a web app's shortcuts), never typing.
+pub fn writable(ctx: &ITfContext) -> bool {
+    if unsafe { ctx.GetStatus() }.map(|st| st.dwDynamicFlags & TS_SD_READONLY != 0).unwrap_or(false) {
+        return false;
+    }
+    !compartment_on(ctx, &GUID_COMPARTMENT_KEYBOARD_DISABLED) && !compartment_on(ctx, &GUID_COMPARTMENT_EMPTYCONTEXT)
+}
+
+fn compartment_on(ctx: &ITfContext, guid: &windows::core::GUID) -> bool {
+    unsafe {
+        let Ok(cm) = ctx.cast::<ITfCompartmentMgr>() else { return false };
+        match cm.GetCompartment(guid).and_then(|c| c.GetValue()) {
+            Ok(v) => v.vt() == windows::Win32::System::Variant::VT_I4 && v.Anonymous.Anonymous.Anonymous.lVal != 0,
+            Err(_) => false,
+        }
+    }
+}
+
+#[implement(ITfEditSession)]
+struct Probe;
+
+impl ITfEditSession_Impl for Probe_Impl {
+    fn DoEditSession(&self, _ec: u32) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// The keyboard is on Chrome's empty document (Windows 11: read-only, where
+/// Chrome points it while the page has no text field focused), but the page
+/// may well have one: Chrome's bridge to TSF sometimes misses the change and
+/// leaves it there (the Inbox diary, a contenteditable, typed nothing at all).
+/// Chrome's real documents all type into whatever field the page has
+/// focused, and grant no lock while there is none: the first of them that
+/// takes text and lets us read is where the keys go. None: the page really
+/// has no text field focused.
+pub fn chrome_field(tid: u32, tm: &ITfThreadMgr, empty: &ITfContext) -> Option<ITfContext> {
+    if !compartment_on(empty, &GUID_COMPARTMENT_EMPTYCONTEXT) {
+        return None;
+    }
+    unsafe {
+        let docs = tm.EnumDocumentMgrs().ok()?;
+        for _ in 0..32 {
+            let mut one = [None];
+            let mut n = 0u32;
+            if docs.Next(&mut one, &mut n).is_err() || n == 0 {
+                break;
+            }
+            let Some(ctx) = one[0].take().and_then(|dm| dm.GetTop().ok()) else { continue };
+            if ctx == *empty || !writable(&ctx) {
+                continue;
+            }
+            let probe: ITfEditSession = Probe.into();
+            if matches!(ctx.RequestEditSession(tid, &probe, TF_ES_SYNC | TF_ES_READ), Ok(hr) if hr.is_ok()) {
+                return Some(ctx);
+            }
+        }
+    }
+    None
+}
+
 unsafe fn selection_range(ctx: &ITfContext, ec: u32) -> Result<ITfRange> {
     ctx.cast::<ITfInsertAtSelection>()?.InsertTextAtSelection(ec, TF_IAS_QUERYONLY, &[])
 }
@@ -178,12 +243,17 @@ impl ITfEditSession_Impl for Apply_Impl {
             let r = self.run(ec);
             if let Err(e) = &r {
                 if let Ok(mut slot) = self.err.try_borrow_mut() {
-                    *slot = Some(format!("edit failed: {e}"));
+                    *slot = Some(format!("edit failed: {} ({:?})", e.message(), e.code()));
                 }
             }
             r
         })
     }
+}
+
+/// Name the step an error came from, for the engine's log.
+fn at(step: &'static str) -> impl FnOnce(windows::core::Error) -> windows::core::Error {
+    move |e| windows::core::Error::new(e.code(), format!("{step}: {}", e.message()))
 }
 
 impl Apply {
@@ -223,7 +293,7 @@ impl Apply {
             if let Some(range) = range {
                 // Whatever comes now (a longer spelling, the word, or
                 // nothing after Esc) replaces the text that was cut off.
-                *comp = Some(ctx.cast::<ITfContextComposition>()?.StartComposition(ec, &range, &self.sink)?);
+                *comp = Some(ctx.cast::<ITfContextComposition>()?.StartComposition(ec, &range, &self.sink).map_err(at("StartComposition over cut-off text"))?);
             }
         }
 
@@ -232,7 +302,7 @@ impl Apply {
             match comp.take() {
                 Some(c) => {
                     let range = c.GetRange()?;
-                    range.SetText(ec, 0, &wide)?;
+                    range.SetText(ec, 0, &wide).map_err(at("SetText commit"))?;
                     if let Ok(p) = ctx.GetProperty(&GUID_PROP_ATTRIBUTE) {
                         let _ = p.Clear(ec, &range);
                     }
@@ -241,7 +311,7 @@ impl Apply {
                     c.EndComposition(ec)?;
                 }
                 None => {
-                    let range = selection_range(ctx, ec)?;
+                    let range = selection_range(ctx, ec).map_err(at("selection"))?;
                     // A closing mark right where one already is (the
                     // partner we put in with its opening one): step over it.
                     if self.state.delete_before == 0 && self.state.caret_back == 0 {
@@ -255,9 +325,9 @@ impl Apply {
                         let mut moved = 0i32;
                         let _ = range.ShiftStart(ec, -(self.state.delete_before as i32), &mut moved, std::ptr::null());
                     }
-                    range.SetText(ec, 0, &wide)?;
+                    range.SetText(ec, 0, &wide).map_err(at("SetText commit at selection"))?;
                     range.Collapse(ec, TF_ANCHOR_END)?;
-                    set_caret(ctx, ec, &range)?;
+                    set_caret(ctx, ec, &range).map_err(at("SetSelection after commit"))?;
                 }
             }
         }
@@ -271,14 +341,14 @@ impl Apply {
         match &self.state.preedit {
             Some(p) if !p.text.is_empty() => {
                 if comp.is_none() {
-                    let range = selection_range(ctx, ec)?;
-                    let c = ctx.cast::<ITfContextComposition>()?.StartComposition(ec, &range, &self.sink)?;
+                    let range = selection_range(ctx, ec).map_err(at("selection"))?;
+                    let c = ctx.cast::<ITfContextComposition>()?.StartComposition(ec, &range, &self.sink).map_err(at("StartComposition"))?;
                     *comp = Some(c);
                 }
                 let c = comp.as_ref().unwrap();
                 let range = c.GetRange()?;
                 let wide: Vec<u16> = p.text.encode_utf16().collect();
-                range.SetText(ec, TF_ST_CORRECTION, &wide)?;
+                range.SetText(ec, TF_ST_CORRECTION, &wide).map_err(at("SetText preedit"))?;
                 if let (Some(atom), Ok(prop)) = (self.attr, ctx.GetProperty(&GUID_PROP_ATTRIBUTE)) {
                     let v = VARIANT::from(atom);
                     let _ = prop.SetValue(ec, &range, &v);
@@ -391,11 +461,13 @@ pub fn apply(
                 return Ok(err.borrow_mut().take());
             }
         }
+        // What went wrong inside our own session, if it ran at all.
+        let inner = || err.borrow_mut().take().map(|e| format!("; {e}")).unwrap_or_default();
         match context.RequestEditSession(tid, &make(), queue) {
             Ok(hr) if queued(hr) => Ok(None),
             // Nothing was done: the caller keeps the edit and tries again.
-            Ok(hr) => Err(format!("{hr:?}")),
-            Err(e) => Err(e.to_string()),
+            Ok(hr) => Err(format!("{hr:?}{}", inner())),
+            Err(e) => Err(format!("{e}{}", inner())),
         }
     }
 }

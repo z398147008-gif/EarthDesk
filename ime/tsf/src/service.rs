@@ -8,7 +8,13 @@
 //!   An answer for a key we let through is applied right away.
 //! - OnKeyDown without a preceding test does both.
 //! - Key-ups go to the engine too (Shift alone toggles 中/英 on release)
-//!   but are never eaten.
+//!   but are never eaten; from OnTestKeyUp, or OnKeyUp when the program
+//!   skipped the test.
+//! - Keys in a context that takes no text (edit::writable: Chrome while
+//!   the page's focus is not in a text field) are the program's: they go
+//!   to it untouched, the engine never sees them. Except when Chrome left
+//!   the keyboard on its empty document although the page does have a text
+//!   field focused: they type into that field (edit::chrome_field).
 
 use crate::candwin;
 use crate::client::Client;
@@ -51,7 +57,14 @@ pub struct TextService {
     /// ← presses owed once the waiting edits are in (bracket pairs).
     left_after: Cell<u32>,
     /// An eaten key's answer, from OnTestKeyDown, for OnKeyDown to apply.
-    deferred: RefCell<Option<(State, edit::Adopt)>>,
+    /// (With the context it goes to: see `target`.)
+    deferred: RefCell<Option<(State, edit::Adopt, ITfContext)>>,
+    /// The key whose release OnTestKeyUp handled (OnKeyUp then skips it).
+    up_done: Cell<Option<u16>>,
+    /// Where keys went last when the program's context takes no text (0:
+    /// it does; 1: passed to the program; 2: Chrome's field), logged once
+    /// per change.
+    readonly_noted: Cell<u8>,
     /// The preedit last put in the document (what an ended composition
     /// leaves behind).
     last_preedit: RefCell<Vec<u16>>,
@@ -79,6 +92,8 @@ impl TextService {
             context: RefCell::new(None),
             orphan: RefCell::new(None),
             deferred: RefCell::new(None),
+            up_done: Cell::new(None),
+            readonly_noted: Cell::new(0),
             retry: RefCell::new(std::collections::VecDeque::new()),
             retries: Cell::new(0),
             left_after: Cell::new(0),
@@ -195,7 +210,7 @@ impl TextService {
     }
 
     fn apply(&self, context: &ITfContext, state: &State, sync: bool) {
-        self.apply_adopting(context, state, sync, edit::Adopt::No)
+        self.apply_adopting(context, state, sync, edit::Adopt::No);
     }
 
     /// Tell the engine's log (never with typed text in it).
@@ -205,7 +220,8 @@ impl TextService {
         }
     }
 
-    fn apply_adopting(&self, context: &ITfContext, state: &State, sync: bool, adopt: edit::Adopt) {
+    /// false: the program's text field takes no text, everything dropped.
+    fn apply_adopting(&self, context: &ITfContext, state: &State, sync: bool, adopt: edit::Adopt) -> bool {
         if let Ok(mut p) = self.last_preedit.try_borrow_mut() {
             match &state.preedit {
                 Some(pre) if !pre.text.is_empty() => *p = pre.text.encode_utf16().collect(),
@@ -219,12 +235,44 @@ impl TextService {
         let waiting = self.retry.try_borrow().map(|q| !q.is_empty()).unwrap_or(false);
         if waiting {
             self.hold(context, state, adopt);
-            return;
+            return true;
         }
         if let Err(why) = self.edit_now(context, state, sync, adopt.clone()) {
+            // Read-only now: it never will take it, do not hold every key
+            // after it for seconds.
+            if !edit::writable(context) {
+                self.note(&format!("edit refused ({why}): the text field takes no text, dropped"));
+                self.drop_typing();
+                return false;
+            }
             self.note(&format!("edit refused ({why}): kept, retrying"));
             self.hold(context, state, adopt);
         }
+        true
+    }
+
+    /// Something typed, shown or waiting that the engine or the document
+    /// still holds.
+    fn busy(&self) -> bool {
+        self.composition.try_borrow().map(|c| c.is_some()).unwrap_or(false)
+            || self.last_preedit.try_borrow().map(|p| !p.is_empty()).unwrap_or(false)
+            || self.retry.try_borrow().map(|q| !q.is_empty()).unwrap_or(false)
+            || self.orphan.try_borrow().map(|o| o.is_some()).unwrap_or(false)
+            || self.deferred.try_borrow().map(|d| d.is_some()).unwrap_or(false)
+    }
+
+    /// The program cannot take text where it has the focus now: what was
+    /// being typed and the edits waiting are dropped, the engine forgets.
+    fn drop_typing(&self) {
+        if let Ok(mut q) = self.retry.try_borrow_mut() {
+            q.clear();
+        }
+        self.retries.set(0);
+        self.left_after.set(0);
+        if let Ok(mut p) = self.last_preedit.try_borrow_mut() {
+            p.clear();
+        }
+        self.reset();
     }
 
     /// One edit session; Err = the program would not take it at all.
@@ -270,6 +318,20 @@ impl TextService {
             let next = self.retry.try_borrow_mut().ok().and_then(|mut q| q.pop_front());
             let Some((ctx, state, adopt)) = next else { break };
             if let Err(why) = self.edit_now(&ctx, &state, false, adopt.clone()) {
+                if !edit::writable(&ctx) {
+                    // It will never take them: drop them now, not after
+                    // seconds of every key waiting behind them.
+                    self.note(&format!("edits refused ({why}): the text field takes no text, dropped"));
+                    if let Ok(mut q) = self.retry.try_borrow_mut() {
+                        q.clear();
+                    }
+                    self.left_after.set(0);
+                    candwin::hide();
+                    if let Ok(mut c) = self.client.try_borrow_mut() {
+                        c.tell(|session| Request::Reset { session });
+                    }
+                    break;
+                }
                 if let Ok(mut q) = self.retry.try_borrow_mut() {
                     q.push_front((ctx, state, adopt));
                 }
@@ -368,6 +430,17 @@ impl TextService {
         if !composing_now && unsafe { windows::Win32::UI::WindowsAndMessaging::GetMessageExtraInfo() }.0 as usize == ime_proto::INJECTED {
             return false;
         }
+        // Nowhere to type (Chrome while the page's focus is not in a text
+        // field, a password box): the key is the program's — a web app's
+        // shortcut — and goes to it untouched. Eating it would start a
+        // composition every edit of which the program refuses (TS_E_READONLY).
+        let Some(ctx) = self.target(context, up) else {
+            if !up && self.busy() {
+                self.drop_typing();
+            }
+            return false;
+        };
+        let context = Some(&ctx);
         // The program cut our composition off since the last key: carry on
         // over its text if the caret is still right after it, else start
         // afresh.
@@ -417,7 +490,7 @@ impl TextService {
         // we want a key (Chromium answers TS_E_SYNCHRONOUS even to a queued
         // request then, and the edit is lost); in OnKeyDown TSF grants them.
         if defer && state.eaten && !up {
-            *self.deferred.borrow_mut() = Some((state, adopt));
+            *self.deferred.borrow_mut() = Some((state, adopt, ctx.clone()));
             return true;
         }
         self.finish(context, state, adopt, up)
@@ -437,8 +510,10 @@ impl TextService {
                 None => p.is_empty() && !composing,
             }).unwrap_or(false);
         if let (Some(ctx), false) = (context, same) {
-            if state.commit.is_some() || state.preedit.is_some() || composing {
-                self.apply_adopting(ctx, &state, true, adopt);
+            if (state.commit.is_some() || state.preedit.is_some() || composing) && !self.apply_adopting(ctx, &state, true, adopt) {
+                // Dropped: no candidates, no caret moves for text that is
+                // not there.
+                return state.eaten && !up;
             }
         }
         // After the edit, so the window opens where the text now is.
@@ -454,6 +529,28 @@ impl TextService {
             }
         }
         state.eaten && !up
+    }
+
+    /// The context a key types into: the program's, if it takes text; when
+    /// it is Chrome's empty document, the page's focused field if it has one
+    /// (edit::chrome_field). None: the key is the program's.
+    fn target(&self, pic: Option<&ITfContext>, up: bool) -> Option<ITfContext> {
+        let pic = pic?;
+        if edit::writable(pic) {
+            self.readonly_noted.set(0);
+            return Some(pic.clone());
+        }
+        let tm = self.thread_mgr.borrow().clone();
+        let field = tm.and_then(|tm| edit::chrome_field(self.tid.get(), &tm, pic));
+        let how = if field.is_some() { 2 } else { 1 };
+        if !up && self.readonly_noted.replace(how) != how {
+            self.note(if field.is_some() {
+                "keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document"
+            } else {
+                "keys in a context that takes no text: passed to the program"
+            });
+        }
+        field
     }
 
     fn reset(&self) {
@@ -561,6 +658,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
 
     fn OnTestKeyDown(&self, pic: windows_core::Ref<'_, ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         guard(Ok(false.into()), || {
+            self.up_done.set(None);
             if self.test_pending.get() {
                 return Ok(true.into());
             }
@@ -572,10 +670,11 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
 
     fn OnKeyDown(&self, pic: windows_core::Ref<'_, ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         guard(Ok(false.into()), || {
+            self.up_done.set(None);
             if self.test_pending.replace(false) {
                 let deferred = self.deferred.borrow_mut().take();
-                if let Some((state, adopt)) = deferred {
-                    self.finish(pic.as_ref(), state, adopt, false);
+                if let Some((state, adopt, ctx)) = deferred {
+                    self.finish(Some(&ctx), state, adopt, false);
                 }
                 return Ok(true.into());
             }
@@ -590,16 +689,30 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             // release, or it will think the key is still held.
             // An edit still waiting (the program skipped OnKeyDown): now.
             let deferred = self.deferred.borrow_mut().take();
-            if let Some((state, adopt)) = deferred {
-                self.finish(pic.as_ref(), state, adopt, false);
+            if let Some((state, adopt, ctx)) = deferred {
+                self.finish(Some(&ctx), state, adopt, false);
             }
             self.process(pic.as_ref(), wparam, lparam, true, false);
+            self.up_done.set(Some(wparam.0 as u16));
             Ok(false.into())
         })
     }
 
-    fn OnKeyUp(&self, _pic: windows_core::Ref<'_, ITfContext>, _wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
-        Ok(false.into())
+    fn OnKeyUp(&self, pic: windows_core::Ref<'_, ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        guard(Ok(false.into()), || {
+            // Programs that report the release here without asking first
+            // (no OnTestKeyUp): the engine must still see it — a lone
+            // Shift switches 中 / 英 on its release.
+            if self.up_done.take() != Some(wparam.0 as u16) {
+                self.test_pending.set(false);
+                let deferred = self.deferred.borrow_mut().take();
+                if let Some((state, adopt, ctx)) = deferred {
+                    self.finish(Some(&ctx), state, adopt, false);
+                }
+                self.process(pic.as_ref(), wparam, lparam, true, false);
+            }
+            Ok(false.into())
+        })
     }
 
     fn OnPreservedKey(&self, _pic: windows_core::Ref<'_, ITfContext>, _rguid: *const GUID) -> Result<BOOL> {

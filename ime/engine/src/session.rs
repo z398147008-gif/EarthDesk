@@ -13,6 +13,7 @@ use crate::mozc::Mozc;
 use crate::rime::{Rime, Snapshot};
 use ime_proto::{CandUi, Cands, Preedit, Reply, Request, State};
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -106,6 +107,14 @@ pub struct Sess {
     pub sentence: [u32; 3],
     /// Typing a "/" command.
     pub cmd: Option<String>,
+    /// 联想 on show (compose.rs): the digit keys pick them.
+    pub predict: Vec<String>,
+    /// The last text committed here (the word 联想 continues).
+    pub last_commit: String,
+    /// 颜文字 added after Rime's own candidates on its first page (face,
+    /// text it goes after), and how many of Rime's come before them.
+    pub kao: Vec<(String, String)>,
+    pub kao_base: usize,
     /// The DLL is from an older build: say so once, when nothing else is
     /// on show.
     pub stale: bool,
@@ -129,6 +138,11 @@ pub struct Engine {
     pub(crate) en: crate::mixed::EnDict,
     pub(crate) hidden: Mutex<crate::mixed::Hidden>,
     pub(crate) enpref: Mutex<crate::mixed::EnPref>,
+    /// 中 / 英 (Rime's ascii_mode), one switch for every program as in the
+    /// Windows input methods (see compose.rs, follow_ascii).
+    pub(crate) ascii: AtomicBool,
+    pub(crate) kaomoji: crate::kaomoji::Kaomoji,
+    pub(crate) predictor: crate::predict::Predictor,
     look: Mutex<Look>,
 }
 
@@ -221,6 +235,18 @@ impl Engine {
             en,
             hidden: Mutex::new(crate::mixed::Hidden::load(&crate::paths::data_file("hidden.json"))),
             enpref: Mutex::new(crate::mixed::EnPref::load(&crate::paths::data_file("enpref.json"))),
+            ascii: AtomicBool::new(false),
+            kaomoji: crate::kaomoji::Kaomoji::load(),
+            predictor: crate::predict::Predictor::start(
+                vec![
+                    (crate::paths::shared_dir().join("cn_dicts").join("base.dict.yaml"), 1.0),
+                    (crate::paths::shared_dir().join("cn_dicts").join("ext.dict.yaml"), 0.5),
+                    // The user's own words (tools/ime-bench/mkpersonal.py).
+                    (crate::paths::user_dir().join("earthdesk_personal.dict.yaml"), 2.0),
+                ],
+                &crate::paths::data_file("nextword.log"),
+                &crate::paths::user_dir().join("nextword_personal.tsv"),
+            ),
             look: Mutex::new(Look::default()),
         }
     }
@@ -388,6 +414,8 @@ impl Engine {
         s.comp = None;
         s.cmd = None;
         s.pending = None;
+        s.predict.clear();
+        s.kao.clear();
     }
 
     pub fn handle(&self, req: Request) -> Reply {
@@ -428,6 +456,10 @@ impl Engine {
                         recent: String::new(),
                         sentence: [0; 3],
                         cmd: None,
+                        predict: Vec::new(),
+                        last_commit: String::new(),
+                        kao: Vec::new(),
+                        kao_base: 0,
                         stale,
                     },
                 );
@@ -532,6 +564,7 @@ impl Engine {
                     }
                     s.last_ja = None;
                     s.sentence = [0; 3];
+                    s.last_commit.clear();
                 }
                 if g.focused == Some(session) {
                     drop(g);

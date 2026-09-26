@@ -9,6 +9,8 @@ mkitems.py), so the benchmark measures words it has not seen.
 Writes, for the user's Rime folder (%APPDATA%\\EarthDesk\\ime\\rime):
   earthdesk_personal.dict.yaml   words you use, with weights from how often
   en_personal.txt                English words in the casing you write them
+  nextword_personal.tsv          which word you write after which (联想:
+                                 the input method suggests it next)
 """
 import collections, math, os, re, sys
 import jieba
@@ -25,13 +27,20 @@ def main():
         docs = [d for i, d in enumerate(docs) if i % 5 != 0]
     zh = collections.Counter()
     en = collections.defaultdict(collections.Counter)
+    pairs = collections.Counter()
     for d in docs:
         for para in d.split("\n"):
+            prev = None
             for tok in jieba.cut(para):
                 if re.fullmatch(r"[一-鿿]{2,6}", tok):
                     zh[tok] += 1
                 elif re.fullmatch(r"[A-Za-z]{2,}", tok):
                     en[tok.lower()][tok] += 1
+                # Chinese word followed by Chinese word, as typed.
+                han = re.fullmatch(r"[一-鿿]{1,8}", tok)
+                if han and prev:
+                    pairs[(prev[-4:], tok)] += 1
+                prev = tok if han else None
     os.makedirs(out, exist_ok=True)
     rows = []
     for w, n in zh.items():
@@ -54,7 +63,12 @@ def main():
         for low, forms in sorted(en.items()):
             if sum(forms.values()) >= 2:
                 f.write(forms.most_common(1)[0][0] + "\n")
-    print(len(rows), "Chinese words,", sum(1 for f in en.values() if sum(f.values()) >= 2), "English words")
+    # The engine keys a word by its last four characters (ime/engine/src/predict.rs).
+    nexts = [(w, n, k) for (w, n), k in pairs.most_common(50_000) if k >= 2]
+    with open(os.path.join(out, "nextword_personal.tsv"), "w", encoding="utf-8") as f:
+        for w, n, k in nexts:
+            f.write(f"{w}\t{n}\t{k}\n")
+    print(len(rows), "Chinese words,", sum(1 for f in en.values() if sum(f.values()) >= 2), "English words,", len(nexts), "word pairs")
 
 
 main()

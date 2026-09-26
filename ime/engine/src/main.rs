@@ -15,9 +15,11 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod compose;
+mod kaomoji;
 mod mixed;
 mod mozc;
 mod paths;
+mod predict;
 mod rime;
 mod rime_sys;
 mod session;
@@ -89,13 +91,15 @@ impl session::Ui for std::sync::Arc<CliUi> {
 
 /// `--cli KEYS`: type KEYS through the whole engine (letters, digits,
 /// punctuation, and {space} {BackSpace} {Return} {Escape} {Page_Down}
-/// {Down} {Shift_L} {Shift_L_up} {C-S-j}) and print the result after each.
+/// {Down} {Shift_L} {Shift_L_up} {C-S-j}, {U-32} for a release) and print
+/// the result after each.
 fn cli(keys: &str) -> Result<(), String> {
     use ime_proto::{keysym as k, mask};
     let r = start_rime()?;
     r.maintain(false, true);
     let ui = std::sync::Arc::new(CliUi::default());
     let e = session::Engine::new(r, start_mozc(), Box::new(ui.clone()), SCHEMA);
+    e.predictor.wait(std::time::Duration::from_secs(60));
     let sid = e.test_session(&std::env::var("EARTHDESK_IME_EXE").unwrap_or_else(|_| "cli.exe".into()));
     let mut chars = keys.chars().peekable();
     while let Some(c) = chars.next() {
@@ -124,6 +128,8 @@ fn cli(keys: &str) -> Result<(), String> {
                 // {S-63}: Shift + key code 63 ('?'); {L-97}: with Caps Lock on.
                 other if other.starts_with("S-") => (other[2..].parse::<u32>().unwrap_or(0), mask::SHIFT),
                 other if other.starts_with("L-") => (other[2..].parse::<u32>().unwrap_or(0), mask::LOCK),
+                // {U-32}: the release of key code 32.
+                other if other.starts_with("U-") => (other[2..].parse::<u32>().unwrap_or(0), mask::RELEASE),
                 "Caps_Lock" => (k::CAPS_LOCK, 0),
                 "Caps_Lock_up" => (k::CAPS_LOCK, mask::LOCK | mask::RELEASE),
                 "Caps_off" => (k::CAPS_LOCK, mask::LOCK),

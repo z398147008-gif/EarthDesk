@@ -18,6 +18,8 @@ pub enum Lang {
     Zh,
     Ja,
     En,
+    /// A 颜文字 from the list (kaomoji.rs).
+    Kao,
 }
 
 /// One entry of the merged candidate list.
@@ -171,7 +173,7 @@ pub fn score(zh: ZhInfo, ja: JaInfo, ctx: Ctx) -> (Option<f32>, Option<f32>) {
     match ctx.last {
         Some(Lang::Zh) => sz = sz.map(|s| s + 0.6),
         Some(Lang::Ja) => sj = sj.map(|s| s + 0.6),
-        Some(Lang::En) | None => {}
+        Some(Lang::En) | Some(Lang::Kao) | None => {}
     }
     let total = ctx.zh_picks + ctx.ja_picks;
     if total > 0 {
@@ -511,7 +513,7 @@ impl LangPref {
         match lang {
             Lang::Zh => e.0 = e.0.saturating_add(1),
             Lang::Ja => e.1 = e.1.saturating_add(1),
-            Lang::En => {}
+            Lang::En | Lang::Kao => {}
         }
         e.2 = self.tick;
         if self.map.len() > PREF_CAP {
