@@ -237,7 +237,6 @@ impl Apply {
                         let _ = p.Clear(ec, &range);
                     }
                     range.Collapse(ec, TF_ANCHOR_END)?;
-                    back(ec, &range, self.state.caret_back);
                     set_caret(ctx, ec, &range)?;
                     c.EndComposition(ec)?;
                 }
@@ -258,7 +257,6 @@ impl Apply {
                     }
                     range.SetText(ec, 0, &wide)?;
                     range.Collapse(ec, TF_ANCHOR_END)?;
-                    back(ec, &range, self.state.caret_back);
                     set_caret(ctx, ec, &range)?;
                 }
             }
@@ -314,16 +312,6 @@ impl Apply {
         }
         Ok(())
     }
-}
-
-/// Collapsed `range` moved `n` UTF-16 units back (between a pair).
-unsafe fn back(ec: u32, range: &ITfRange, n: u32) {
-    if n == 0 {
-        return;
-    }
-    let mut moved = 0i32;
-    let _ = range.ShiftStart(ec, -(n as i32), &mut moved, std::ptr::null());
-    let _ = range.Collapse(ec, TF_ANCHOR_START);
 }
 
 /// `text` is one closing mark and the document has that same mark right

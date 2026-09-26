@@ -200,7 +200,7 @@ impl Client {
             };
             self.conn = Some(Conn { pipe, event });
         }
-        let hello = Request::Hello { version: ime_proto::VERSION, pid: unsafe { GetCurrentProcessId() }, exe: exe_name(), notify: self.notify, draws: self.draws };
+        let hello = Request::Hello { version: ime_proto::VERSION, pid: unsafe { GetCurrentProcessId() }, exe: exe_name(), notify: self.notify, draws: self.draws, build: ime_proto::BUILD.to_string() };
         match self.raw(&hello) {
             Some(Reply::Hello { session, .. }) => {
                 self.session = session;

@@ -14,6 +14,13 @@
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
+/// The build this was compiled in (tools/build-ime.ps1 sets EARTHDESK_BUILD
+/// to the commit and time); empty in other builds.
+pub const BUILD: &str = match option_env!("EARTHDESK_BUILD") {
+    Some(b) => b,
+    None => "",
+};
+
 /// Bumped when a message changes shape; both sides check it in Hello.
 pub const VERSION: u32 = 1;
 
@@ -214,6 +221,11 @@ pub enum Request {
         /// its own window. Older DLLs leave it out.
         #[serde(default)]
         draws: bool,
+        /// Which build the DLL is (`BUILD`); a program opened before an
+        /// update keeps the old DLL until it is reopened. Older DLLs leave
+        /// it out.
+        #[serde(default)]
+        build: String,
     },
     /// A key went down (or up, with mask::RELEASE).
     Key { session: u64, keycode: u32, mask: u32 },
@@ -423,7 +435,7 @@ mod tests {
         assert_eq!(read_frame::<_, Reply>(&mut buf.as_slice()).unwrap(), s);
         // A Hello from an older DLL (no `draws`) still parses.
         let old: Request = serde_json::from_str(r#"{"t":"hello","version":1,"pid":1,"exe":"a.exe","notify":0}"#).unwrap();
-        assert!(matches!(old, Request::Hello { draws: false, .. }));
+        assert!(matches!(old, Request::Hello { draws: false, ref build, .. } if build.is_empty()));
     }
 
     #[test]

@@ -71,6 +71,11 @@ if (-not $haveMozc) {
 # ---- 编译
 Write-Host "  编译输入法 …" -ForegroundColor Gray
 $manifest = Join-Path $ime "Cargo.toml"
+# 每次编译的标记(提交号 + 时间):引擎据此认出还在用旧输入法模块的程序
+# (更新前就打开、没重开的),在候选窗里提示重新打开。
+$commit = ""
+if (Get-Command git -ErrorAction SilentlyContinue) { $commit = git -C $root rev-parse --short HEAD 2>$null }
+$env:EARTHDESK_BUILD = "$commit-" + (Get-Date -Format "yyyyMMddHHmm")
 cargo build --release --manifest-path $manifest -p ime-engine -p ime-tsf
 $ok64 = ($LASTEXITCODE -eq 0)
 

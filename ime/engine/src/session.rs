@@ -106,6 +106,9 @@ pub struct Sess {
     pub sentence: [u32; 3],
     /// Typing a "/" command.
     pub cmd: Option<String>,
+    /// The DLL is from an older build: say so once, when nothing else is
+    /// on show.
+    pub stale: bool,
 }
 
 struct Inner {
@@ -236,6 +239,10 @@ impl Engine {
         // Derived again each time: the hour moves on.
         l.skin = make_skin(l.kind.as_deref().unwrap_or(""), l.weather.as_ref(), now_secs());
         l.skin.clone()
+    }
+
+    fn flash_note(&self, session: u64, text: &str) -> UiOut {
+        UiOut::Show(View { session, candidates: vec![(text.to_string(), String::new())], labels: vec![String::new()], highlighted: -1, last_page: true, flash: true, ..Default::default() })
     }
 
     /// （ typed: put in （） with the caret between (settings: auto_pair).
@@ -385,7 +392,13 @@ impl Engine {
             Err(p) => p.into_inner(),
         };
         match req {
-            Request::Hello { version, exe, notify, draws, .. } => {
+            Request::Hello { version, exe, notify, draws, build, .. } => {
+                // A program opened before the last update still has the old
+                // DLL: its fixes do not reach it until it is reopened.
+                let stale = !build.is_empty() && !ime_proto::BUILD.is_empty() && build != ime_proto::BUILD;
+                if stale {
+                    crate::log(&format!("dll [{exe}] is build {build}, engine {}: the program needs reopening", ime_proto::BUILD));
+                }
                 if version != ime_proto::VERSION {
                     return Reply::Error { message: format!("protocol {version}, engine speaks {}", ime_proto::VERSION) };
                 }
@@ -411,6 +424,7 @@ impl Engine {
                         recent: String::new(),
                         sentence: [0; 3],
                         cmd: None,
+                        stale,
                     },
                 );
                 Reply::Hello { version: ime_proto::VERSION, session: id }
@@ -440,8 +454,12 @@ impl Engine {
                     return Reply::Busy;
                 }
                 let Some(s) = g.sessions.get_mut(&session) else { return Reply::Error { message: "no such session".into() } };
-                let (mut state, ui) = self.key(s, session, keycode, mask);
+                let (mut state, mut ui) = self.key(s, session, keycode, mask);
                 self.pair(&mut state);
+                if s.stale && mask & ime_proto::mask::RELEASE == 0 && !matches!(ui, UiOut::Show(_)) && state.preedit.is_none() {
+                    s.stale = false;
+                    ui = self.flash_note(session, "输入法已更新：重新打开这个程序才会用上新版本");
+                }
                 let (cands, ui) = Self::route(s.draws, self.dress(ui));
                 state.cands = cands;
                 let caret = s.caret;
@@ -650,7 +668,7 @@ impl Engine {
     /// For the --cli test: a session without a pipe.
     #[allow(dead_code)]
     pub fn test_session(&self, exe: &str) -> u64 {
-        match self.handle(Request::Hello { version: ime_proto::VERSION, pid: 0, exe: exe.into(), notify: 0, draws: false }) {
+        match self.handle(Request::Hello { version: ime_proto::VERSION, pid: 0, exe: exe.into(), notify: 0, draws: false, build: String::new() }) {
             Reply::Hello { session, .. } => session,
             _ => 0,
         }

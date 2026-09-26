@@ -298,6 +298,10 @@ impl TextService {
         }
         // After the edit, so the window opens where the text now is.
         self.show_cands(&state);
+        // A pair of brackets went in: the caret goes between them.
+        if state.caret_back > 0 && !up {
+            keys::caret_left(state.caret_back);
+        }
         state.eaten && !up
     }
 
