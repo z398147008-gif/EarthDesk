@@ -45,6 +45,11 @@ pub struct TextService {
     context: RefCell<Option<ITfContext>>,
     /// Our composition's text after the program ended it (edit::Orphan).
     orphan: RefCell<Option<edit::Orphan>>,
+    /// Edits the program refused, waiting to be tried again (in order).
+    retry: RefCell<std::collections::VecDeque<(ITfContext, State, edit::Adopt)>>,
+    retries: Cell<u32>,
+    /// ← presses owed once the waiting edits are in (bracket pairs).
+    left_after: Cell<u32>,
     /// An eaten key's answer, from OnTestKeyDown, for OnKeyDown to apply.
     deferred: RefCell<Option<(State, edit::Adopt)>>,
     /// The preedit last put in the document (what an ended composition
@@ -74,6 +79,9 @@ impl TextService {
             context: RefCell::new(None),
             orphan: RefCell::new(None),
             deferred: RefCell::new(None),
+            retry: RefCell::new(std::collections::VecDeque::new()),
+            retries: Cell::new(0),
+            left_after: Cell::new(0),
             last_preedit: RefCell::new(Vec::new()),
             ended: Rc::new(Cell::new(0)),
             me: RefCell::new(None),
@@ -88,7 +96,22 @@ impl TextService {
 
 static CLASS_READY: AtomicBool = AtomicBool::new(false);
 
+/// On the notification window: try refused edits again.
+const RETRY_TIMER: usize = 0x4552;
+
 unsafe extern "system" fn notify_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if msg == WM_TIMER && wp.0 == RETRY_TIMER {
+        guard((), || {
+            CURRENT.with(|c| {
+                if let Some(tip) = c.borrow().clone() {
+                    if let Ok(s) = tip.cast_object_ref::<TextService>() {
+                        s.on_retry();
+                    }
+                }
+            })
+        });
+        return LRESULT(0);
+    }
     if msg == ime_proto::WM_NOTIFY_OFFSET {
         guard((), || {
             CURRENT.with(|c| {
@@ -189,7 +212,24 @@ impl TextService {
                 _ => p.clear(),
             }
         }
-        let Some(sink) = self.sink() else { return };
+        if state.preedit.is_some() {
+            *self.context.borrow_mut() = Some(context.clone());
+        }
+        // Edits still waiting: this one goes behind them, never before.
+        let waiting = self.retry.try_borrow().map(|q| !q.is_empty()).unwrap_or(false);
+        if waiting {
+            self.hold(context, state, adopt);
+            return;
+        }
+        if let Err(why) = self.edit_now(context, state, sync, adopt.clone()) {
+            self.note(&format!("edit refused ({why}): kept, retrying"));
+            self.hold(context, state, adopt);
+        }
+    }
+
+    /// One edit session; Err = the program would not take it at all.
+    fn edit_now(&self, context: &ITfContext, state: &State, sync: bool, adopt: edit::Adopt) -> std::result::Result<(), String> {
+        let Some(sink) = self.sink() else { return Ok(()) };
         let client = self.client.clone();
         let on_caret: edit::OnCaret = Rc::new(move |rc: RECT| {
             candwin::caret(rc);
@@ -197,13 +237,65 @@ impl TextService {
                 c.tell(|session| Request::Caret { session, x: rc.left, y: rc.top, h: (rc.bottom - rc.top).max(1) });
             }
         });
-        if let Some(note) = edit::apply(self.tid.get(), context, &sink, &self.composition, state, self.attr.get(), sync, on_caret, adopt, &self.ended) {
-            if let Ok(mut c) = self.client.try_borrow_mut() {
-                c.tell(|session| Request::Note { session, message: note.clone() });
+        let note = edit::apply(self.tid.get(), context, &sink, &self.composition, state, self.attr.get(), sync, on_caret, adopt, &self.ended)?;
+        if let Some(note) = note {
+            self.note(&note);
+        }
+        Ok(())
+    }
+
+    /// Keep a refused edit and try again from our own window, once the
+    /// program is done with the key (Chrome refuses every edit while it
+    /// holds the document, even queued ones).
+    fn hold(&self, context: &ITfContext, state: &State, adopt: edit::Adopt) {
+        if let Ok(mut q) = self.retry.try_borrow_mut() {
+            q.push_back((context.clone(), state.clone(), adopt));
+            if q.len() > 64 {
+                q.pop_front();
             }
         }
-        if state.preedit.is_some() {
-            *self.context.borrow_mut() = Some(context.clone());
+        let n = self.notify.get();
+        if !n.0.is_null() {
+            unsafe {
+                let _ = SetTimer(Some(n), RETRY_TIMER, 15, None);
+            }
+        }
+    }
+
+    /// RETRY_TIMER: the waiting edits, in order, as far as the program
+    /// takes them now.
+    fn on_retry(&self) {
+        let n = self.notify.get();
+        loop {
+            let next = self.retry.try_borrow_mut().ok().and_then(|mut q| q.pop_front());
+            let Some((ctx, state, adopt)) = next else { break };
+            if let Err(why) = self.edit_now(&ctx, &state, false, adopt.clone()) {
+                if let Ok(mut q) = self.retry.try_borrow_mut() {
+                    q.push_front((ctx, state, adopt));
+                }
+                let tries = self.retries.get() + 1;
+                self.retries.set(tries);
+                if tries > 200 {
+                    // Three seconds of refusals: the program is gone or stuck.
+                    self.note(&format!("edits still refused ({why}): dropped"));
+                    if let Ok(mut q) = self.retry.try_borrow_mut() {
+                        q.clear();
+                    }
+                    break;
+                }
+                return;
+            }
+            self.retries.set(0);
+        }
+        self.retries.set(0);
+        if !n.0.is_null() {
+            unsafe {
+                let _ = KillTimer(Some(n), RETRY_TIMER);
+            }
+        }
+        let left = self.left_after.replace(0);
+        if left > 0 {
+            keys::caret_left(left);
         }
     }
 
@@ -333,7 +425,10 @@ impl TextService {
 
     /// Put the engine's answer into the document and the window.
     fn finish(&self, context: Option<&ITfContext>, state: State, adopt: edit::Adopt, up: bool) -> bool {
-        let composing = self.composition.try_borrow().map(|c| c.is_some()).unwrap_or(false) || !matches!(adopt, edit::Adopt::No);
+        let waiting = self.retry.try_borrow().map(|q| !q.is_empty()).unwrap_or(false);
+        // Edits still waiting may hold a composition our slot does not show
+        // yet: whatever comes now must follow them (an Esc ends it).
+        let composing = self.composition.try_borrow().map(|c| c.is_some()).unwrap_or(false) || !matches!(adopt, edit::Adopt::No) || waiting;
         // A key-up hands back the preedit as it is: no edit for nothing.
         let same = up
             && state.commit.is_none()
@@ -348,9 +443,15 @@ impl TextService {
         }
         // After the edit, so the window opens where the text now is.
         self.show_cands(&state);
-        // A pair of brackets went in: the caret goes between them.
+        // A pair of brackets went in: the caret goes between them — after
+        // the edit, so once waiting edits are in (typed keys would otherwise
+        // overtake them).
         if state.caret_back > 0 && !up {
-            keys::caret_left(state.caret_back);
+            if self.retry.try_borrow().map(|q| !q.is_empty()).unwrap_or(false) {
+                self.left_after.set(self.left_after.get() + state.caret_back);
+            } else {
+                keys::caret_left(state.caret_back);
+            }
         }
         state.eaten && !up
     }
@@ -361,6 +462,13 @@ impl TextService {
         if let Ok(mut d) = self.deferred.try_borrow_mut() {
             *d = None;
         }
+        // Waiting edits (a word already chosen) go in before the text field
+        // is left; what they cannot do is dropped.
+        self.on_retry();
+        if let Ok(mut q) = self.retry.try_borrow_mut() {
+            q.clear();
+        }
+        self.left_after.set(0);
         if let Ok(mut c) = self.client.try_borrow_mut() {
             c.tell(|session| Request::Reset { session });
         }
