@@ -2,9 +2,10 @@
 //!
 //! Key flow (the Weasel pattern, which copes with programs that call the
 //! sink oddly):
-//! - OnTestKeyDown sends the key to the engine and applies the answer;
-//!   if it was eaten, remember that, so the OnKeyDown that follows only
-//!   confirms it.
+//! - OnTestKeyDown sends the key to the engine; if it was eaten, the
+//!   answer is kept and applied in the OnKeyDown that follows (programs
+//!   refuse edits during the test: Chromium does, even queued ones).
+//!   An answer for a key we let through is applied right away.
 //! - OnKeyDown without a preceding test does both.
 //! - Key-ups go to the engine too (Shift alone toggles 中/英 on release)
 //!   but are never eaten.
@@ -44,6 +45,8 @@ pub struct TextService {
     context: RefCell<Option<ITfContext>>,
     /// Our composition's text after the program ended it (edit::Orphan).
     orphan: RefCell<Option<edit::Orphan>>,
+    /// An eaten key's answer, from OnTestKeyDown, for OnKeyDown to apply.
+    deferred: RefCell<Option<(State, edit::Adopt)>>,
     /// The preedit last put in the document (what an ended composition
     /// leaves behind).
     last_preedit: RefCell<Vec<u16>>,
@@ -70,6 +73,7 @@ impl TextService {
             composition: Rc::new(RefCell::new(None)),
             context: RefCell::new(None),
             orphan: RefCell::new(None),
+            deferred: RefCell::new(None),
             last_preedit: RefCell::new(Vec::new()),
             ended: Rc::new(Cell::new(0)),
             me: RefCell::new(None),
@@ -133,6 +137,18 @@ unsafe fn create_notify_window() -> HWND {
         let _ = ChangeWindowMessageFilterEx(hwnd, ime_proto::WM_NOTIFY_OFFSET, MSGFLT_ALLOW, None);
     }
     hwnd
+}
+
+/// From our candidate window: delete candidate `index` of the page.
+pub fn forget_from_window(index: u32) {
+    CURRENT.with(|c| {
+        let tip = c.try_borrow().ok().and_then(|c| c.clone());
+        if let Some(tip) = tip {
+            if let Ok(s) = tip.cast_object_ref::<TextService>() {
+                s.on_forget(index);
+            }
+        }
+    })
 }
 
 /// From our candidate window (candwin.rs): a candidate, a page arrow or the
@@ -238,8 +254,22 @@ impl TextService {
         self.show_cands(&st);
     }
 
+    /// A candidate deleted in our own window (right click, then click).
+    fn on_forget(&self, index: u32) {
+        let st = {
+            let Ok(mut c) = self.client.try_borrow_mut() else { return };
+            match c.forget(index) {
+                Some(s) => s,
+                None => return,
+            }
+        };
+        self.show_cands(&st);
+    }
+
     /// Send a key; apply the answer. Returns whether it was eaten.
-    fn process(&self, context: Option<&ITfContext>, wp: WPARAM, lp: LPARAM, up: bool) -> bool {
+    /// `defer`: called from OnTestKeyDown; an eaten key's edit is kept for
+    /// OnKeyDown.
+    fn process(&self, context: Option<&ITfContext>, wp: WPARAM, lp: LPARAM, up: bool, defer: bool) -> bool {
         // Keys 地球桌面 sends itself (a gesture's Ctrl+W) are commands for
         // the program, never typing.
         let composing_now = self.composition.try_borrow().map(|c| c.is_some()).unwrap_or(false);
@@ -290,8 +320,28 @@ impl TextService {
                 }
             }
         };
+        // Eaten in OnTestKeyDown: the edit waits for the OnKeyDown that
+        // follows. Programs refuse edits while they are only asking whether
+        // we want a key (Chromium answers TS_E_SYNCHRONOUS even to a queued
+        // request then, and the edit is lost); in OnKeyDown TSF grants them.
+        if defer && state.eaten && !up {
+            *self.deferred.borrow_mut() = Some((state, adopt));
+            return true;
+        }
+        self.finish(context, state, adopt, up)
+    }
+
+    /// Put the engine's answer into the document and the window.
+    fn finish(&self, context: Option<&ITfContext>, state: State, adopt: edit::Adopt, up: bool) -> bool {
         let composing = self.composition.try_borrow().map(|c| c.is_some()).unwrap_or(false) || !matches!(adopt, edit::Adopt::No);
-        if let Some(ctx) = context {
+        // A key-up hands back the preedit as it is: no edit for nothing.
+        let same = up
+            && state.commit.is_none()
+            && self.last_preedit.try_borrow().map(|p| match &state.preedit {
+                Some(pre) => pre.text.encode_utf16().eq(p.iter().copied()),
+                None => p.is_empty() && !composing,
+            }).unwrap_or(false);
+        if let (Some(ctx), false) = (context, same) {
             if state.commit.is_some() || state.preedit.is_some() || composing {
                 self.apply_adopting(ctx, &state, true, adopt);
             }
@@ -308,6 +358,9 @@ impl TextService {
     fn reset(&self) {
         candwin::hide();
         *self.orphan.borrow_mut() = None;
+        if let Ok(mut d) = self.deferred.try_borrow_mut() {
+            *d = None;
+        }
         if let Ok(mut c) = self.client.try_borrow_mut() {
             c.tell(|session| Request::Reset { session });
         }
@@ -403,7 +456,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             if self.test_pending.get() {
                 return Ok(true.into());
             }
-            let eaten = self.process(pic.as_ref(), wparam, lparam, false);
+            let eaten = self.process(pic.as_ref(), wparam, lparam, false, true);
             self.test_pending.set(eaten);
             Ok(eaten.into())
         })
@@ -412,9 +465,13 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     fn OnKeyDown(&self, pic: windows_core::Ref<'_, ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         guard(Ok(false.into()), || {
             if self.test_pending.replace(false) {
+                let deferred = self.deferred.borrow_mut().take();
+                if let Some((state, adopt)) = deferred {
+                    self.finish(pic.as_ref(), state, adopt, false);
+                }
                 return Ok(true.into());
             }
-            Ok(self.process(pic.as_ref(), wparam, lparam, false).into())
+            Ok(self.process(pic.as_ref(), wparam, lparam, false, false).into())
         })
     }
 
@@ -423,7 +480,12 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             self.test_pending.set(false);
             // Key-ups are reported, never eaten: the program must see every
             // release, or it will think the key is still held.
-            self.process(pic.as_ref(), wparam, lparam, true);
+            // An edit still waiting (the program skipped OnKeyDown): now.
+            let deferred = self.deferred.borrow_mut().take();
+            if let Some((state, adopt)) = deferred {
+                self.finish(pic.as_ref(), state, adopt, false);
+            }
+            self.process(pic.as_ref(), wparam, lparam, true, false);
             Ok(false.into())
         })
     }

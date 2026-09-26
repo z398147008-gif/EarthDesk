@@ -254,7 +254,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             // Look up what was hit, then let go of the window state before
             // the text service (which updates the window) takes over.
             let mut hit = None;
-            with_win(|win| hit = win.canvas.hit(x, y));
+            let mut doomed = None;
+            with_win(|win| {
+                hit = win.canvas.hit(x, y);
+                // A click on the one marked for deletion deletes it.
+                if let (Some(Hit::Cand(i)), Some(a)) = (hit, win.canvas.armed()) {
+                    if i == a {
+                        doomed = Some(i);
+                    }
+                }
+                if win.canvas.armed().is_some() {
+                    win.canvas.arm(None);
+                    draw(win);
+                }
+            });
+            if let Some(i) = doomed {
+                guard((), || crate::service::forget_from_window(i as u32));
+                return LRESULT(0);
+            }
             let pick = match hit {
                 Some(Hit::Cand(i)) => Some((Some(i as u32), None)),
                 Some(Hit::Prev) => Some((None, Some(true))),
@@ -263,6 +280,27 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             };
             if let Some((index, page)) = pick {
                 guard((), || crate::service::pick_from_window(index, page));
+            }
+            LRESULT(0)
+        }
+        // Right click: mark the candidate for deletion; again: delete it.
+        WM_RBUTTONUP => {
+            let x = (lp.0 & 0xffff) as i16 as f32;
+            let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
+            let mut doomed = None;
+            with_win(|win| {
+                match (win.canvas.hit(x, y), win.canvas.armed()) {
+                    (Some(Hit::Cand(i)), Some(a)) if i == a => {
+                        win.canvas.arm(None);
+                        doomed = Some(i);
+                    }
+                    (Some(Hit::Cand(i)), _) => win.canvas.arm(Some(i)),
+                    _ => win.canvas.arm(None),
+                }
+                draw(win);
+            });
+            if let Some(i) = doomed {
+                guard((), || crate::service::forget_from_window(i as u32));
             }
             LRESULT(0)
         }

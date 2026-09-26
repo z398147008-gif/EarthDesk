@@ -1062,6 +1062,10 @@ impl Engine {
             let key = comp.merged.iter().filter(|m| m.lang == Lang::En).count() as i64;
             comp.merged.push(mixed::Merged { lang: Lang::En, key, text: code.clone(), comment: "英".into() });
         }
+        // Words deleted with a right click for this input.
+        if let Ok(h) = self.hidden.lock() {
+            comp.merged.retain(|m| !h.is_hidden(&code, &m.text));
+        }
         comp.en_leads = comp.merged.first().map(|m| m.lang == Lang::En).unwrap_or(false);
         comp.ja_leads = match comp.merged.first() {
             Some(m) => m.lang == Lang::Ja,
@@ -1301,6 +1305,65 @@ impl Engine {
                 }
                 self.native_done(s, session, v)
             }
+        }
+    }
+
+    /// Delete candidate `index` of the current page (right click): the
+    /// engines forget it if they learned it, and it is not offered for this
+    /// input again. The list is worked out anew; the spelling stays.
+    pub(crate) fn forget(&self, s: &mut Sess, session: u64, index: usize) -> (State, UiOut) {
+        let ps = self.page_size();
+        match s.comp.as_ref().map(|c| (c.native, c.expand.is_some())) {
+            // Rime alone: its own list, its own deletion (learned words).
+            None => {
+                let rs = self.rime_session(s);
+                self.rime.delete_on_page(rs, index);
+                let snap = self.rime.snapshot(rs);
+                (self.to_state(true, &snap), self.rime_ui(session, &snap))
+            }
+            Some((false, false)) => {
+                let Some(c) = s.comp.as_ref() else { return (eaten_with(None), UiOut::Keep) };
+                let i = (c.hl / ps) * ps + index;
+                let Some(item) = c.merged.get(i).cloned() else { return (eaten_with(self.mixed_preedit(s)), UiOut::Keep) };
+                let code = c.code();
+                match item.lang {
+                    Lang::Zh => {
+                        let rs = self.rime_session(s);
+                        self.rime.delete_candidate(rs, item.key as usize);
+                    }
+                    Lang::Ja => {
+                        if let (Some(m), true) = (&self.mozc, s.mozc != 0) {
+                            let _ = m.delete_from_history(s.mozc, item.key as i32);
+                        }
+                    }
+                    Lang::En => {}
+                }
+                if let Ok(mut h) = self.hidden.lock() {
+                    h.hide(&code, &item.text);
+                }
+                crate::log(&format!("candidate deleted ({:?}, {} letters)", item.lang, code.len()));
+                self.rebuild(s);
+                let (st, ui) = self.refresh(s, session);
+                // Stay where the deleted one was.
+                if let Some(c) = s.comp.as_mut() {
+                    c.hl = i.min(c.merged.len().saturating_sub(1));
+                }
+                let ui = if matches!(ui, UiOut::Show(_)) { self.mixed_view(s, session) } else { ui };
+                (st, ui)
+            }
+            // Mozc's own list: forget what it learned.
+            Some((true, _)) => {
+                if let (Some(m), Some(c)) = (&self.mozc, s.comp.as_ref()) {
+                    let page = if c.ja_view.converting { c.ja_view.focused.unwrap_or(0) } else { c.hl } / ps;
+                    if let Some(cand) = c.ja_view.candidates.get(page * ps + index) {
+                        if let Some(v) = m.delete_from_history(s.mozc, cand.id) {
+                            return self.native_done(s, session, Some(v));
+                        }
+                    }
+                }
+                (eaten_with(s.comp.as_ref().and_then(|c| self.native_preedit(&c.ja_view))), UiOut::Keep)
+            }
+            Some((false, true)) => (eaten_with(self.mixed_preedit(s)), UiOut::Keep),
         }
     }
 

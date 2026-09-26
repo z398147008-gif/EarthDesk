@@ -117,6 +117,10 @@
 .hour.now .t { opacity: 1; }
 .hour img { width: 1.85rem; height: 1.85rem; }
 .hour .v { font-size: 0.94rem; font-weight: 600; }
+/* The chance of rain under the icon; the cell keeps its height either way so
+   the row does not jump. */
+.hour .icon-cell { display: flex; flex-direction: column; align-items: center; height: 2.45rem; }
+.hour .pop { font-size: 0.62rem; line-height: 1; font-weight: 600; color: #7cd1ff; margin-top: -0.1rem; }
 .hour.event .v { font-size: 0.74rem; font-weight: 600; opacity: 0.9; }
 
 /* --- days ----------------------------------------------------------------- */
@@ -146,6 +150,7 @@
   margin-top: -0.12rem;
 }
 .day .icon-cell { display: flex; flex-direction: column; align-items: center; }
+.day .pop.low { opacity: 0.6; }
 .day .lo { text-align: right; opacity: 0.62; }
 .day .hi { text-align: right; }
 

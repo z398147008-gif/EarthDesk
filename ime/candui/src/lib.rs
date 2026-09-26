@@ -266,6 +266,9 @@ pub struct Canvas {
     last: Option<(Cands, Caret)>,
     animating: bool,
     ticking: bool,
+    /// Right-clicked, waiting for a second click to delete: the candidate's
+    /// place on the page and its text (a new list disarms it).
+    armed: Option<(usize, String)>,
 }
 
 /// The timer a window drawn by a `Canvas` must hand to `Canvas::tick`.
@@ -364,6 +367,7 @@ impl Canvas {
             last: None,
             animating: false,
             ticking: false,
+            armed: None,
         })
     }
 
@@ -401,6 +405,17 @@ impl Canvas {
                 self.animating = false;
             }
         }
+    }
+
+    /// The candidate marked for deletion (right click), if any.
+    pub fn armed(&self) -> Option<usize> {
+        self.armed.as_ref().map(|a| a.0)
+    }
+
+    /// Mark candidate `i` of the page shown for deletion (None: unmark).
+    /// Redraw to show it.
+    pub fn arm(&mut self, i: Option<usize>) {
+        self.armed = i.and_then(|i| self.last.as_ref().and_then(|(v, _)| v.candidates.get(i)).map(|c| (i, c.0.clone())));
     }
 
     /// What is at window pixel (x, y).
@@ -520,9 +535,15 @@ impl Canvas {
         let row_y = pad + pre_h + 3.0 * s;
         let mut row_h: f32 = 0.0;
         let mut measured = Vec::new();
+        if self.armed.as_ref().map(|(i, t)| view.candidates.get(*i).map(|c| &c.0) != Some(t)).unwrap_or(false) {
+            self.armed = None;
+        }
+        let armed = self.armed();
         for (i, (text, comment)) in view.candidates.iter().enumerate() {
             let label = view.labels.get(i).cloned().unwrap_or_else(|| (i + 1).to_string());
             let (Some(l), Some(t)) = (self.layout(&label, &flabel), self.layout(text, &fcand)) else { continue };
+            // Marked for deletion: says so where the comment goes.
+            let comment = if armed == Some(i) { "删除" } else { comment.as_str() };
             let c = if comment.is_empty() { None } else { self.layout(comment, &fsmall) };
             let w = l.1 + 4.0 * s + t.1 + c.as_ref().map(|c| c.1 + 4.0 * s).unwrap_or(0.0);
             row_h = row_h.max(t.2);
@@ -551,7 +572,7 @@ impl Canvas {
         };
         let width = (content_w + pad * 2.0).ceil() as i32;
         let height = (bottom + pad * 1.5).ceil() as i32;
-        let shadow = (8.0 * s) as i32;
+        let shadow = (10.0 * s).ceil() as i32;
         let (w, h) = (width + shadow * 2, height + shadow * 2);
         if w > 8000 || h > 2000 || !self.reserve(w, h) {
             log(&format!("candidate window: no bitmap for {w}x{h}"));
@@ -580,13 +601,19 @@ impl Canvas {
         t.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
         let ox = shadow as f32;
         let oy = shadow as f32;
-        // Soft shadow: a few expanding translucent rounded rects.
+        // Shadow: a tight contact shadow and a wide, faint falloff (spread,
+        // drop, opacity). The old six equal layers added up to ~20% black
+        // right at the edge: a grey ring on light pages.
+        let mut layers = vec![(0.5, 0.6, 0.05), (1.5, 1.0, 0.022)];
         for i in 0..6 {
-            let e = i as f32 * 1.3 * s;
-            if let Ok(b) = t.CreateSolidColorBrush(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.035 }, None) {
+            layers.push((2.5 + i as f32 * 1.1, 1.6, 0.014 * (1.0 - i as f32 / 7.0)));
+        }
+        for (spread, drop, a) in layers {
+            let (e, dy) = (spread * s, drop * s);
+            if let Ok(b) = t.CreateSolidColorBrush(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a }, None) {
                 t.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
-                        rect: D2D_RECT_F { left: ox - e, top: oy - e + 2.0 * s, right: ox + width as f32 + e, bottom: oy + height as f32 + e + 2.0 * s },
+                        rect: D2D_RECT_F { left: ox - e, top: oy - e + dy, right: ox + width as f32 + e, bottom: oy + height as f32 + e + dy },
                         radiusX: 10.0 * s + e,
                         radiusY: 10.0 * s + e,
                     },
@@ -622,14 +649,16 @@ impl Canvas {
         }
         let mut hits = HitMap::default();
         for (i, (x, y, iw, l, tx, c)) in items.iter().enumerate() {
-            let hl = i as i32 == view.highlighted;
+            let doomed = armed == Some(i);
+            let hl = i as i32 == view.highlighted || doomed;
             let cx = ox + x;
             let cy = oy + y;
             // The highlight: the same margin on every side of the ink.
             let cell = (cx - 7.0 * s, cy - 2.0 * s, iw + 14.0 * s, row_h + 4.0 * s);
             let mid = cy + row_h * 0.5;
             if hl {
-                if let Some(b) = brush(&pal.hl_bg) {
+                let red = color(0xe5484d, 1.0);
+                if let Some(b) = brush(if doomed { &red } else { &pal.hl_bg }) {
                     t.FillRoundedRectangle(
                         &D2D1_ROUNDED_RECT {
                             rect: D2D_RECT_F { left: cell.0, top: cell.1, right: cell.0 + cell.2, bottom: cell.1 + cell.3 },

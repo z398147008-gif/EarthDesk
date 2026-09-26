@@ -130,6 +130,14 @@ fn click(c: &Canvas, x: f32, y: f32) {
     std::thread::spawn(move || e.pick(session, index, page));
 }
 
+/// Delete candidate `i` of the page on screen.
+fn forget(i: usize) {
+    let Some(engine) = ENGINE.get() else { return };
+    let session = SHOWN_SESSION.load(Ordering::SeqCst);
+    let e = engine.clone();
+    std::thread::spawn(move || e.forget_from_window(session, i));
+}
+
 thread_local! {
     static CANVAS: std::cell::RefCell<Option<Canvas>> = const { std::cell::RefCell::new(None) };
 }
@@ -209,8 +217,45 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let x = (lp.0 & 0xffff) as i16 as f32;
             let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
             CANVAS.with(|c| {
-                if let Some(c) = c.borrow().as_ref() {
+                if let Some(c) = c.borrow_mut().as_mut() {
+                    // A click on the one marked for deletion deletes it.
+                    if let (Some(Hit::Cand(i)), Some(a)) = (c.hit(x, y), c.armed()) {
+                        if i == a {
+                            c.arm(None);
+                            forget(i);
+                            return;
+                        }
+                    }
+                    if c.armed().is_some() {
+                        c.arm(None);
+                        redraw(c, hwnd);
+                    }
                     click(c, x, y);
+                }
+            });
+            LRESULT(0)
+        }
+        // Right click on a candidate: mark it for deletion (red, 删除);
+        // a second click on it deletes it, anything else unmarks it.
+        WM_RBUTTONUP => {
+            let x = (lp.0 & 0xffff) as i16 as f32;
+            let y = ((lp.0 >> 16) & 0xffff) as i16 as f32;
+            CANVAS.with(|c| {
+                if let Some(c) = c.borrow_mut().as_mut() {
+                    match (c.hit(x, y), c.armed()) {
+                        (Some(Hit::Cand(i)), Some(a)) if i == a => {
+                            c.arm(None);
+                            forget(i);
+                        }
+                        (Some(Hit::Cand(i)), _) => {
+                            c.arm(Some(i));
+                            redraw(c, hwnd);
+                        }
+                        _ => {
+                            c.arm(None);
+                            redraw(c, hwnd);
+                        }
+                    }
                 }
             });
             LRESULT(0)
