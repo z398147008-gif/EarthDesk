@@ -86,11 +86,14 @@ pub struct Settings {
     pub skin: String,
     /// An opening bracket or quote brings its partner: （ gives （|）.
     pub auto_pair: bool,
+    /// Caps Lock switches to English (small letters, Shift for capitals),
+    /// as on a Mac; off: it types capitals.
+    pub caps_english: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { page_size: 7, emoji: false, shift_toggle: true, ascii_apps: Vec::new(), mixed: true, skin: String::new(), auto_pair: true }
+        Settings { page_size: 7, emoji: false, shift_toggle: true, ascii_apps: Vec::new(), mixed: true, skin: String::new(), auto_pair: true, caps_english: true }
     }
 }
 

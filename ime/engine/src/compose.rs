@@ -375,26 +375,50 @@ impl Engine {
 
         let idle = s.comp.is_none() && s.cmd.is_none() && !self.rime.snapshot(self.rime_session(s)).composing;
 
-        // Caps Lock: capitals, typed straight into the program. Pressed in
-        // the middle of a word, what was typed so far goes in as it is.
+        // Caps Lock. By default (settings: caps_english) it switches to
+        // English the way it does on a Mac: while it is on, letters come
+        // out small (Shift for capitals) and everything else as the
+        // keyboard types it; off again, back to Chinese. Otherwise: capitals,
+        // typed straight into the program. Either way, pressed in the
+        // middle of a word, what was typed so far goes in as it is.
+        let caps_english = self.settings.lock().map(|st| st.caps_english).unwrap_or(true);
         if code == ks::CAPS_LOCK {
-            if up || idle {
-                return (pass(), UiOut::Keep);
-            }
-            let typed = self.typed_so_far(s);
-            self.clear_comp(s);
-            if !typed.is_empty() {
-                self.committed(s, &typed, Lang::En, "");
-            }
-            return (State { eaten: false, commit: (!typed.is_empty()).then_some(typed), ..Default::default() }, UiOut::Hide);
-        }
-        if m & mask::LOCK != 0 && !ctrl_alt && char::from_u32(code).map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
             if up {
                 return (pass(), UiOut::Keep);
             }
-            if idle {
-                if let Some(c) = char::from_u32(code) {
-                    let t = c.to_string();
+            let typed = if idle { String::new() } else { self.typed_so_far(s) };
+            if !idle {
+                self.clear_comp(s);
+            }
+            if !typed.is_empty() {
+                self.committed(s, &typed, Lang::En, "");
+            }
+            let commit = (!typed.is_empty()).then_some(typed);
+            // keyconv reports the state before this press.
+            let turning_on = m & mask::LOCK == 0;
+            let ui = if caps_english { self.flash(session, if turning_on { "英文" } else { "中文" }) } else if idle { UiOut::Keep } else { UiOut::Hide };
+            return (State { eaten: false, commit, ..Default::default() }, ui);
+        }
+        if m & mask::LOCK != 0 && !ctrl_alt && idle {
+            let ch = char::from_u32(code);
+            if caps_english && ch.map(|c| c.is_ascii_graphic()).unwrap_or(false) {
+                let c = ch.unwrap();
+                if up || !c.is_ascii_alphabetic() {
+                    // Digits, punctuation: as the keyboard types them.
+                    if !up {
+                        self.committed(s, &c.to_string(), Lang::En, "");
+                    }
+                    return (pass(), UiOut::Keep);
+                }
+                // The program would type a capital (Caps Lock is on for it
+                // too): put the letter in ourselves, the other way round.
+                let t = if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c.to_ascii_uppercase() }.to_string();
+                self.committed(s, &t, Lang::En, "");
+                return (State { eaten: true, commit: Some(t), ..Default::default() }, UiOut::Hide);
+            }
+            if !caps_english && ch.map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+                if !up {
+                    let t = ch.unwrap().to_string();
                     self.committed(s, &t, Lang::En, "");
                 }
                 return (pass(), UiOut::Hide);

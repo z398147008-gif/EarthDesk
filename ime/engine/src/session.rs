@@ -608,6 +608,14 @@ impl Engine {
         }
         self.rime.finalize();
         crate::log("engine stopped");
+        // Everything is saved. Leave without running the libraries' exit
+        // handlers: librime / Mozc tear down in an order that crashed in
+        // KERNELBASE (0x87a) on every installer stop.
+        #[cfg(windows)]
+        unsafe {
+            use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+            let _ = TerminateProcess(GetCurrentProcess(), 0);
+        }
         std::process::exit(0)
     }
 
