@@ -127,6 +127,7 @@ pub struct Engine {
     pub(crate) pref: Mutex<LangPref>,
     pub(crate) modes: Mutex<ModeMemory>,
     pub(crate) en: crate::mixed::EnDict,
+    pub(crate) hidden: Mutex<crate::mixed::Hidden>,
     look: Mutex<Look>,
 }
 
@@ -217,6 +218,7 @@ impl Engine {
             pref: Mutex::new(LangPref::load(&crate::paths::data_file("langpref.json"))),
             modes: Mutex::new(ModeMemory::load(&crate::paths::data_file("modes.json"))),
             en,
+            hidden: Mutex::new(crate::mixed::Hidden::load(&crate::paths::data_file("hidden.json"))),
             look: Mutex::new(Look::default()),
         }
     }
@@ -481,6 +483,19 @@ impl Engine {
                 self.apply_ui(ui, caret);
                 Reply::State(state)
             }
+            Request::Forget { session, index } => {
+                if !self.ready() {
+                    return Reply::Busy;
+                }
+                let Some(s) = g.sessions.get_mut(&session) else { return Reply::Error { message: "no such session".into() } };
+                let (mut state, ui) = self.forget(s, session, index as usize);
+                let (cands, ui) = Self::route(s.draws, self.dress(ui));
+                state.cands = cands;
+                let caret = s.caret;
+                drop(g);
+                self.apply_ui(ui, caret);
+                Reply::State(state)
+            }
             Request::Caret { session, x, y, h } => {
                 let c = Caret { x, y, h };
                 let mut draws = false;
@@ -611,6 +626,24 @@ impl Engine {
         if index.is_some() {
             self.ui.notify(notify);
         }
+    }
+
+    /// Right click, then click, in our own window: delete candidate `index`
+    /// of the current page. The spelling in the program stays as it is.
+    pub fn forget_from_window(&self, session: u64, index: usize) {
+        let mut g = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if !self.ready() {
+            return;
+        }
+        let Some(s) = g.sessions.get_mut(&session) else { return };
+        let (_, ui) = self.forget(s, session, index);
+        let ui = self.dress(ui);
+        let caret = s.caret;
+        drop(g);
+        self.apply_ui(ui, caret);
     }
 
     /// Logoff, shutdown or the installer asking us to go: flush and exit.

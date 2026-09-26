@@ -271,6 +271,16 @@ impl Rime {
         call!(self.select_candidate(s, index)) != 0
     }
 
+    /// Forget a word the user dictionary learned (the menu's `index`).
+    /// Words of the shipped dictionaries stay (Rime cannot delete them).
+    pub fn delete_candidate(&self, s: RimeSessionId, index: usize) -> bool {
+        call!(self.delete_candidate(s, index)) != 0
+    }
+
+    pub fn delete_on_page(&self, s: RimeSessionId, index: usize) -> bool {
+        call!(self.delete_candidate_on_current_page(s, index)) != 0
+    }
+
     /// Everything the UI needs after a key: pending commit, preedit, menu.
     pub fn snapshot(&self, s: RimeSessionId) -> Snapshot {
         let mut out = Snapshot::default();

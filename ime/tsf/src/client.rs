@@ -254,6 +254,13 @@ impl Client {
         }
     }
 
+    pub fn forget(&mut self, index: u32) -> Option<State> {
+        match self.call(|session| Request::Forget { session, index })? {
+            Reply::State(s) => Some(s),
+            _ => None,
+        }
+    }
+
     pub fn key(&mut self, keycode: u32, mask: u32) -> Option<State> {
         match self.call(|session| Request::Key { session, keycode, mask })? {
             Reply::State(s) => Some(s),

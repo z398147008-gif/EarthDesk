@@ -365,6 +365,42 @@ pub fn insert_english(merged: &mut Vec<Merged>, words: &[String], se: f32, best_
     }
 }
 
+// --- Candidates the user deleted ---------------------------------------------------
+
+/// Words the user removed with a right click, per input (the letters as
+/// typed): never offered for that input again. Kept in
+/// %APPDATA%\EarthDesk\ime\hidden.json. The engines forget what they learned
+/// themselves (Rime's user dictionary, Mozc's history); this also covers
+/// their shipped dictionaries, which cannot be changed.
+pub struct Hidden {
+    path: PathBuf,
+    map: HashMap<String, Vec<String>>,
+}
+
+impl Hidden {
+    pub fn load(path: &Path) -> Hidden {
+        let map = std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        Hidden { path: path.to_path_buf(), map }
+    }
+
+    pub fn is_hidden(&self, code: &str, text: &str) -> bool {
+        self.map.get(code).map(|v| v.iter().any(|t| t == text)).unwrap_or(false)
+    }
+
+    pub fn hide(&mut self, code: &str, text: &str) {
+        if code.is_empty() || self.is_hidden(code, text) {
+            return;
+        }
+        self.map.entry(code.to_string()).or_default().push(text.to_string());
+        if let Ok(b) = serde_json::to_vec_pretty(&self.map) {
+            let tmp = self.path.with_extension("tmp");
+            if std::fs::write(&tmp, b).is_ok() {
+                let _ = std::fs::rename(&tmp, &self.path);
+            }
+        }
+    }
+}
+
 // --- Which language an input usually is ------------------------------------------
 
 /// Per input code: how often it ended up Chinese / Japanese. This is the
@@ -528,6 +564,17 @@ mod tests {
         assert_eq!(m[0].text, "Inbox");
         // "the" is weak against Chinese.
         assert!(en_score("the", true, None).unwrap() <= 1.4);
+    }
+
+    #[test]
+    fn hidden_store() {
+        let p = std::env::temp_dir().join(format!("hidden-{}.json", std::process::id()));
+        let mut h = Hidden::load(&p);
+        h.hide("inbox", "韻母x");
+        assert!(h.is_hidden("inbox", "韻母x"));
+        assert!(!h.is_hidden("inbo", "韻母x") && !h.is_hidden("inbox", "inbox"));
+        assert!(Hidden::load(&p).is_hidden("inbox", "韻母x"));
+        let _ = std::fs::remove_file(p);
     }
 
     #[test]

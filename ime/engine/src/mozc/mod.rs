@@ -275,6 +275,11 @@ impl Mozc {
         self.command(id, Sc::SelectCandidate, Some(cand))
     }
 
+    /// Forget a suggestion learned from what the user typed before.
+    pub fn delete_from_history(&self, id: u64, cand: i32) -> Option<JaView> {
+        self.command(id, Sc::DeleteCandidateFromHistory, Some(cand))
+    }
+
     /// Commit what is there (Enter).
     pub fn submit(&self, id: u64) -> Option<JaView> {
         self.command(id, Sc::Submit, None)

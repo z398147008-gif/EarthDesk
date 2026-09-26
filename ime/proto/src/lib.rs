@@ -244,6 +244,10 @@ pub enum Request {
     /// current page was clicked (`index`), or a page arrow / the wheel
     /// (`page` = Some(backward)). Answered with the resulting State.
     Pick { session: u64, index: Option<u32>, page: Option<bool> },
+    /// From a DLL that draws the candidates itself: the user deleted
+    /// candidate `index` of the current page (right click). Answered with
+    /// the resulting State.
+    Forget { session: u64, index: u32 },
     /// Throw the current composition away (the document lost focus).
     Reset { session: u64 },
     Bye { session: u64 },
