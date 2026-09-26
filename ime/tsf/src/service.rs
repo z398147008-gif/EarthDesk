@@ -266,6 +266,7 @@ impl TextService {
                     }
                     _ => {
                         self.note(&format!("cut-off composition ({} chars) not at the caret any more: dropped", o.text.len()));
+                        candwin::hide();
                         if let Ok(mut c) = self.client.try_borrow_mut() {
                             c.tell(|session| Request::Reset { session });
                         }
@@ -467,23 +468,23 @@ impl ITfCompositionSink_Impl for TextService_Impl {
             // the first text of a new line arrives), which would leave the
             // spelling in the text ("ran后" for 然后): keep what was cut
             // off, and let the next key decide (Orphan). The candidate
-            // window goes meanwhile.
+            // window stays: such programs end the composition after every
+            // key on that line, and the window would never be seen. It goes
+            // with the Reset if the next key finds the text abandoned, or
+            // when the focus moves.
             self.ended.set(self.ended.get().wrapping_add(1));
             if let Ok(mut c) = self.composition.try_borrow_mut() {
                 *c = None;
             }
             let text = self.last_preedit.try_borrow_mut().map(|mut p| std::mem::take(&mut *p)).unwrap_or_default();
-            candwin::hide();
             if text.is_empty() {
+                candwin::hide();
                 if let Ok(mut c) = self.client.try_borrow_mut() {
                     c.tell(|session| Request::Reset { session });
                 }
                 return Ok(());
             }
             self.note(&format!("program ended the composition ({} chars kept for the next key)", text.len()));
-            if let Ok(mut c) = self.client.try_borrow_mut() {
-                c.tell(|session| Request::Focus { session, on: false });
-            }
             if let Ok(mut o) = self.orphan.try_borrow_mut() {
                 *o = Some(edit::Orphan { text, at: std::time::Instant::now() });
             }
