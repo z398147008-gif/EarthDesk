@@ -14,7 +14,8 @@
 //!   the page's focus is not in a text field) are the program's: they go
 //!   to it untouched, the engine never sees them. Except when Chrome left
 //!   the keyboard on its empty document although the page does have a text
-//!   field focused: they type into that field (edit::chrome_field).
+//!   field focused: the keyboard is moved back to Chrome's text document
+//!   (refocus_chrome), as Chrome does when a field gets the focus.
 
 use crate::candwin;
 use crate::client::Client;
@@ -61,9 +62,12 @@ pub struct TextService {
     deferred: RefCell<Option<(State, edit::Adopt, ITfContext)>>,
     /// The key whose release OnTestKeyUp handled (OnKeyUp then skips it).
     up_done: Cell<Option<u16>>,
+    /// We are moving the keyboard ourselves (refocus_chrome): not a new
+    /// text field, nothing to drop.
+    refocusing: Cell<bool>,
     /// Where keys went last when the program's context takes no text (0:
-    /// it does; 1: passed to the program; 2: Chrome's field), logged once
-    /// per change.
+    /// it does; 1: passed to the program; 3: Chrome's field, the keyboard
+    /// not movable), logged once per change.
     readonly_noted: Cell<u8>,
     /// The preedit last put in the document (what an ended composition
     /// leaves behind).
@@ -100,6 +104,7 @@ impl TextService {
             deferred: RefCell::new(None),
             up_done: Cell::new(None),
             readonly_noted: Cell::new(0),
+            refocusing: Cell::new(false),
             retry: RefCell::new(std::collections::VecDeque::new()),
             retries: Cell::new(0),
             left_after: Cell::new(0),
@@ -121,8 +126,24 @@ static CLASS_READY: AtomicBool = AtomicBool::new(false);
 
 /// On the notification window: try refused edits again.
 const RETRY_TIMER: usize = 0x4552;
+/// On the notification window: the keyboard went to Chrome's empty
+/// document; put it back on its text document if the page has a field.
+const REFOCUS_TIMER: usize = 0x4553;
 
 unsafe extern "system" fn notify_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if msg == WM_TIMER && wp.0 == REFOCUS_TIMER {
+        let _ = KillTimer(Some(hwnd), REFOCUS_TIMER);
+        guard((), || {
+            CURRENT.with(|c| {
+                if let Some(tip) = c.borrow().clone() {
+                    if let Ok(s) = tip.cast_object_ref::<TextService>() {
+                        s.refocus_chrome();
+                    }
+                }
+            })
+        });
+        return LRESULT(0);
+    }
     if msg == WM_TIMER && wp.0 == RETRY_TIMER {
         guard((), || {
             CURRENT.with(|c| {
@@ -620,17 +641,45 @@ impl TextService {
             self.readonly_noted.set(0);
             return Some(pic.clone());
         }
-        let tm = self.thread_mgr.borrow().clone();
-        let field = tm.and_then(|tm| edit::chrome_field(self.tid.get(), &tm, pic));
-        let how = if field.is_some() { 2 } else { 1 };
-        if !up && self.readonly_noted.replace(how) != how {
-            self.note(if field.is_some() {
-                "keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document"
-            } else {
-                "keys in a context that takes no text: passed to the program"
-            });
+        // Chrome's empty document with a field on the page: the keyboard
+        // goes back where Chrome should have left it (refocus_chrome); if
+        // Windows will not move it now, the keys still go to that field.
+        let field = self.refocus_chrome().or_else(|| {
+            let tm = self.thread_mgr.borrow().clone();
+            tm.and_then(|tm| edit::chrome_field(self.tid.get(), &tm, pic))
+        });
+        if field.is_none() && !up && self.readonly_noted.replace(1) != 1 {
+            self.note("keys in a context that takes no text: passed to the program");
         }
         field
+    }
+
+    /// Chrome sometimes leaves the keyboard on its empty (read-only)
+    /// document although the page has a text field focused: in the Inbox
+    /// diary's rich editor every key went there, and nothing typed arrived,
+    /// while its text boxes were fine. Chrome's own documents all type into
+    /// the focused field (edit::chrome_field finds one that takes text):
+    /// the keyboard goes to it, as Chrome itself does when a field gets the
+    /// focus, and from there typing goes the normal way. The field's
+    /// context, or None when there was nothing to do.
+    fn refocus_chrome(&self) -> Option<ITfContext> {
+        let tm = self.thread_mgr.borrow().clone()?;
+        let top = unsafe { tm.GetFocus().and_then(|d| d.GetTop()) }.ok()?;
+        if !edit::is_empty_doc(&top) {
+            return None;
+        }
+        let field = edit::chrome_field(self.tid.get(), &tm, &top)?;
+        let doc = unsafe { field.GetDocumentMgr() }.ok()?;
+        self.refocusing.set(true);
+        let r = unsafe { tm.SetFocus(&doc) };
+        self.refocusing.set(false);
+        let moved = r.is_ok() && unsafe { tm.GetFocus() }.map(|d| d == doc).unwrap_or(false);
+        if moved {
+            self.note("keyboard was on Chrome's empty document while the page has a text field focused: moved it back to Chrome's text document");
+        } else if self.readonly_noted.replace(3) != 3 {
+            self.note(&format!("keyboard on Chrome's empty document, could not move it ({r:?}): typing into Chrome's text document"));
+        }
+        Some(field)
     }
 
     fn reset(&self) {
@@ -813,12 +862,27 @@ impl ITfThreadMgrEventSink_Impl for TextService_Impl {
     }
     fn OnSetFocus(&self, focus: windows_core::Ref<'_, ITfDocumentMgr>, _prev: windows_core::Ref<'_, ITfDocumentMgr>) -> Result<()> {
         guard(Ok(()), || {
+            // Our own move (refocus_chrome): the same text field.
+            if self.refocusing.get() {
+                return Ok(());
+            }
             // Moving to another text field: whatever was being typed is
             // dropped, as in every Windows input method.
             self.reset();
             if let Ok(mut c) = self.client.try_borrow_mut() {
                 let on = !focus.is_null();
                 c.tell(|session| Request::Focus { session, on });
+            }
+            // Chrome's empty document: Chrome moves on to its text document
+            // right away when a field is focused. If it is still there a
+            // moment later with a field on the page, we move it
+            // (refocus_chrome) — before the next key, not during it.
+            let empty = focus.as_ref().and_then(|d| unsafe { d.GetTop() }.ok()).map(|c| edit::is_empty_doc(&c)).unwrap_or(false);
+            let n = self.notify.get();
+            if empty && !n.0.is_null() {
+                unsafe {
+                    let _ = SetTimer(Some(n), REFOCUS_TIMER, 30, None);
+                }
             }
             Ok(())
         })
