@@ -1,9 +1,9 @@
-﻿== 时间 2026-09-26 15:10:06  Windows Microsoft Windows NT 10.0.22631.0  ACP=932
+﻿== 时间 2026-09-26 15:38:26  Windows Microsoft Windows NT 10.0.22631.0  ACP=932
 == 安装目录 C:\Program Files\地球桌面\ime
               1  data
         1315840  EarthDeskIME.exe
-         515072  EarthDeskTSF.dll
-         423424  EarthDeskTSF32.dll
+         519680  EarthDeskTSF.dll
+         428032  EarthDeskTSF32.dll
        22523392  earthdesk_mozc.dll
              14  earthdesk_mozc.tag
           45041  ime.ico
@@ -13,7 +13,7 @@
          178616  vcruntime140.dll
           50112  vcruntime140_1.dll
 == 正在运行的引擎
-   pid 5976  C:\Program Files\地球桌面\ime\EarthDeskIME.exe
+   pid 18852  C:\Program Files\地球桌面\ime\EarthDeskIME.exe
 == 注册表
    64 位: C:\Program Files\地球桌面\ime\EarthDeskTSF.dll
    Run:   "C:\Program Files\地球桌面\ime\EarthDeskIME.exe"
@@ -107,13 +107,13 @@
             1  \rime
           157  \enpref.json
            79  \hidden.json
-        96225  \ime.log
+        99284  \ime.log
             1  \jis-keyboard
-        12582  \langpref.json
+        12750  \langpref.json
            27  \modes.json
           440  \nextword.log
-          119  \settings.json
-          167  \weather.json
+          204  \settings.json
+          168  \weather.json
         80012  \mozc\boundary.db
          2060  \mozc\cform.db
        320012  \mozc\segment.db
@@ -143,14 +143,63 @@
         27874  \rime\rime_ice.userdb\000169.ldb
          5849  \rime\rime_ice.userdb\000181.ldb
           385  \rime\rime_ice.userdb\000190.ldb
-   log: 1790402973 dll [claude.exe]: program ended the composition (2 chars kept for the next key)
-   log: 1790402973 dll [claude.exe]: program ended the composition (2 chars kept for the next key)
-   log: 1790402973 dll [claude.exe]: cut-off composition (2 chars) taken over
-   log: 1790402973 dll [claude.exe]: program ended the composition (3 chars kept for the next key)
-   log: 1790402973 dll [claude.exe]: cut-off composition (3 chars) taken over
-   log: 1790402973 dll [claude.exe]: program ended the composition (4 chars kept for the next key)
-   log: 1790402973 dll [claude.exe]: program ended the composition (4 chars kept for the next key)
-   log: 1790402974 dll [claude.exe]: program ended the composition (4 chars kept for the next key)
+   log: 1790404582 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Roaming\EarthDesk\ime\rime
+   log: 1790404582 mozc 24.11.oss
+   log: 1790404582 english words: 22519
+   log: 1790404582 listening on \\.\pipe\EarthDeskIME.8
+   log: 1790404583 prediction: 869957 phrases in 251 ms
+   log: 1790404590 engine stopped
+   log: 1790404609 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Roaming\EarthDesk\ime\rime
+   log: 1790404609 mozc 24.11.oss
+   log: 1790404609 english words: 22519
+   log: 1790404609 listening on \\.\pipe\EarthDeskIME.9
+   log: 1790404609 prediction: 869957 phrases in 437 ms
+   log: 1790404642 rime: option _auto_commit
+   log: 1790404642 rime: option emoji
+   log: 1790404642 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790404643 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790404648 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790404650 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790404660 rime: option _auto_commit
+   log: 1790404660 rime: option emoji
+   log: 1790404660 rime: schema double_pinyin_mspy/微软双拼
+   log: 1790404664 dll [claude.exe]: program ended the composition (2 chars kept for the next key)
+   log: 1790404664 dll [claude.exe]: cut-off composition (2 chars) taken over
+   log: 1790404664 dll [claude.exe]: program ended the composition (3 chars kept for the next key)
+   log: 1790404665 dll [claude.exe]: cut-off composition (3 chars) taken over
+   log: 1790404665 dll [claude.exe]: program ended the composition (4 chars kept for the next key)
+   log: 1790404665 dll [claude.exe]: cut-off composition (4 chars) taken over
+   log: 1790404699 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790404701 rime: option _auto_commit
+   log: 1790404701 rime: option emoji
+   log: 1790404701 rime: schema double_pinyin_mspy/微软双拼
+   --- chrome.exe
+   log: 1790390783 dll [chrome.exe]: edits still refused (HRESULT(0x80040209)): dropped
+   log: 1790390790 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790390849 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790390852 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790400062 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790400066 dll [chrome.exe]: edits still refused (HRESULT(0x80040209)): dropped
+   log: 1790400106 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790400109 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790400183 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790400186 dll [chrome.exe]: edits still refused (HRESULT(0x80040209)): dropped
+   log: 1790400376 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790400380 dll [chrome.exe]: edits still refused (HRESULT(0x80040209)): dropped
+   log: 1790402664 dll [chrome.exe] is build f04e58e-202609261414, engine 94e42c3-202609261459: the program needs reopening
+   log: 1790402665 dll [chrome.exe]: edit refused (HRESULT(0x80040209)): kept, retrying
+   log: 1790402714 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790402716 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790402718 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790402725 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790402732 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790402743 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790402770 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790404643 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790404648 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790404650 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   log: 1790404699 dll [chrome.exe]: keyboard on Chrome's empty document while the page has a text field focused: typing into Chrome's text document
+   --- claude.exe
    log: 1790402974 dll [claude.exe]: cut-off composition (4 chars) taken over
    log: 1790402975 dll [claude.exe]: program ended the composition (2 chars kept for the next key)
    log: 1790402975 dll [claude.exe]: program ended the composition (2 chars kept for the next key)
@@ -161,9 +210,6 @@
    log: 1790402975 dll [claude.exe]: program ended the composition (4 chars kept for the next key)
    log: 1790402975 dll [claude.exe]: program ended the composition (4 chars kept for the next key)
    log: 1790402975 dll [claude.exe]: cut-off composition (4 chars) taken over
-   log: 1790402981 rime: option _auto_commit
-   log: 1790402981 rime: option emoji
-   log: 1790402981 rime: schema double_pinyin_mspy/微软双拼
    log: 1790402985 dll [claude.exe]: program ended the composition (2 chars kept for the next key)
    log: 1790402985 dll [claude.exe]: program ended the composition (2 chars kept for the next key)
    log: 1790402985 dll [claude.exe]: cut-off composition (2 chars) taken over
@@ -173,35 +219,49 @@
    log: 1790402985 dll [claude.exe]: program ended the composition (4 chars kept for the next key)
    log: 1790402985 dll [claude.exe]: program ended the composition (4 chars kept for the next key)
    log: 1790402985 dll [claude.exe]: cut-off composition (4 chars) taken over
+   log: 1790404664 dll [claude.exe]: program ended the composition (2 chars kept for the next key)
+   log: 1790404664 dll [claude.exe]: cut-off composition (2 chars) taken over
+   log: 1790404664 dll [claude.exe]: program ended the composition (3 chars kept for the next key)
+   log: 1790404665 dll [claude.exe]: cut-off composition (3 chars) taken over
+   log: 1790404665 dll [claude.exe]: program ended the composition (4 chars kept for the next key)
+   log: 1790404665 dll [claude.exe]: cut-off composition (4 chars) taken over
+   --- weixin.exe
+   log: 1790387469 dll [weixin.exe]: program ended the composition (4 chars kept for the next key)
+   log: 1790387511 dll [weixin.exe]: program ended the composition (4 chars kept for the next key)
+   log: 1790387593 dll [weixin.exe]: program ended the composition (4 chars kept for the next key)
+   --- explorer.exe
+   log: 1790390794 dll [explorer.exe] is build e115d02-202609261110, engine e89a9a1-202609261140: the program needs reopening
+   log: 1790400068 dll [explorer.exe] is build e89a9a1-202609261140, engine f04e58e-202609261414: the program needs reopening
+   log: 1790402670 dll [explorer.exe] is build f04e58e-202609261414, engine 94e42c3-202609261459: the program needs reopening
 == 试运行引擎:installed (C:\Program Files\地球桌面\ime)
    退出码  (0x)
    out:         n eaten=1 commit="" preedit="n" cands=*那 年 女 ♀ 难 n(日) 内
    out:         i eaten=1 commit="" preedit="ni" cands=*你 尼 泥 逆 拟 二(日) 腻
    out:         h eaten=1 commit="" preedit="nih" cands=*你会 你回 你还 你好 👋 二(日) 你和
    out:         k eaten=1 commit="" preedit="nihk" cands=*你好 👋 (・ω・)ﾉ(颜) ( ´ ▽ ` )ﾉ(颜) ヾ(＾∇＾)(颜) 拟好 你
-   out:     space eaten=1 commit="你好" preedit="" cands=吗 漂亮 给力呀 啊 九月 生活 呀
-   log: 1790403006 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Local\Temp\edime-installed
-   log: 1790403006 rime: deploy start
-   log: 1790403017 rime: deploy success
-   log: 1790403017 mozc 24.11.oss
-   log: 1790403017 english words: 22303
-   log: 1790403018 prediction: 868481 phrases in 241 ms
-   log: 1790403018 rime: option _auto_commit
-   log: 1790403018 rime: option emoji
-   log: 1790403018 rime: schema double_pinyin_mspy/微软双拼
+   out:     space eaten=1 commit="你好" preedit="" cands=
+   log: 1790404707 librime 1.17.0 shared=C:\Program Files\地球桌面\ime\data user=C:\Users\cheny\AppData\Local\Temp\edime-installed
+   log: 1790404707 rime: deploy start
+   log: 1790404718 rime: deploy success
+   log: 1790404718 mozc 24.11.oss
+   log: 1790404718 english words: 22303
+   log: 1790404718 prediction: 868481 phrases in 248 ms
+   log: 1790404718 rime: option _auto_commit
+   log: 1790404718 rime: option emoji
+   log: 1790404718 rime: schema double_pinyin_mspy/微软双拼
 == 试运行引擎:ascii (C:\Users\Public\edime-test)
    退出码  (0x)
    out:         n eaten=1 commit="" preedit="n" cands=*那 年 女 ♀ 难 n(日) 内
    out:         i eaten=1 commit="" preedit="ni" cands=*你 尼 泥 逆 拟 二(日) 腻
    out:         h eaten=1 commit="" preedit="nih" cands=*你会 你回 你还 你好 👋 二(日) 你和
    out:         k eaten=1 commit="" preedit="nihk" cands=*你好 👋 (・ω・)ﾉ(颜) ( ´ ▽ ` )ﾉ(颜) ヾ(＾∇＾)(颜) 拟好 你
-   out:     space eaten=1 commit="你好" preedit="" cands=吗 漂亮 给力呀 啊 九月 生活 呀
-   log: 1790403018 librime 1.17.0 shared=C:\Users\Public\edime-test\data user=C:\Users\cheny\AppData\Local\Temp\edime-ascii
-   log: 1790403018 rime: deploy start
-   log: 1790403029 rime: deploy success
-   log: 1790403029 mozc 24.11.oss
-   log: 1790403029 english words: 22303
-   log: 1790403030 prediction: 868481 phrases in 243 ms
-   log: 1790403030 rime: option _auto_commit
-   log: 1790403030 rime: option emoji
-   log: 1790403030 rime: schema double_pinyin_mspy/微软双拼
+   out:     space eaten=1 commit="你好" preedit="" cands=
+   log: 1790404719 librime 1.17.0 shared=C:\Users\Public\edime-test\data user=C:\Users\cheny\AppData\Local\Temp\edime-ascii
+   log: 1790404719 rime: deploy start
+   log: 1790404731 rime: deploy success
+   log: 1790404731 mozc 24.11.oss
+   log: 1790404731 english words: 22303
+   log: 1790404731 prediction: 868481 phrases in 269 ms
+   log: 1790404731 rime: option _auto_commit
+   log: 1790404731 rime: option emoji
+   log: 1790404731 rime: schema double_pinyin_mspy/微软双拼
