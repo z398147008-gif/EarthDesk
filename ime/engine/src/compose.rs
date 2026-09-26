@@ -383,8 +383,13 @@ impl Engine {
         // middle of a word, what was typed so far goes in as it is.
         let caps_english = self.settings.lock().map(|st| st.caps_english).unwrap_or(true);
         if code == ks::CAPS_LOCK {
+            // Which way it switched is only certain on the release: on the
+            // press, programs differ in whether Windows has flipped the
+            // light yet (Chrome: not yet; hence 中文 shown for English).
             if up {
-                return (pass(), UiOut::Keep);
+                let on = m & mask::LOCK != 0;
+                let ui = if caps_english { self.flash(session, if on { "英文" } else { "中文" }) } else { UiOut::Keep };
+                return (pass(), ui);
             }
             let typed = if idle { String::new() } else { self.typed_so_far(s) };
             if !idle {
@@ -394,9 +399,7 @@ impl Engine {
                 self.committed(s, &typed, Lang::En, "");
             }
             let commit = (!typed.is_empty()).then_some(typed);
-            // keyconv reports the state before this press.
-            let turning_on = m & mask::LOCK == 0;
-            let ui = if caps_english { self.flash(session, if turning_on { "英文" } else { "中文" }) } else if idle { UiOut::Keep } else { UiOut::Hide };
+            let ui = if idle { UiOut::Keep } else { UiOut::Hide };
             return (State { eaten: false, commit, ..Default::default() }, ui);
         }
         if m & mask::LOCK != 0 && !ctrl_alt && idle {
@@ -1051,6 +1054,15 @@ impl Engine {
         let mut words = if letters { self.en.lookup(&code, mixed::sentence_start(&s_recent)) } else { Vec::new() };
         // Picked as English before: that spelling, higher up.
         let learned = if letters { self.enpref.lock().ok().and_then(|e| e.get(&code)) } else { None };
+        // Then the other ways to write it (Inbox, InBox, INBOX), after the
+        // dictionary's own and the learned one.
+        if !words.is_empty() {
+            for v in self.en.case_variants(&code) {
+                if !words.contains(&v) {
+                    words.push(v);
+                }
+            }
+        }
         let base = mixed::en_score(&code, !words.is_empty(), last);
         let se = mixed::en_learned(&mut words, base, learned, zp, jp);
         if let Some(se) = se {

@@ -286,6 +286,32 @@ impl EnDict {
         self.map.len()
     }
 
+    /// Is this (lower-case) spelling a word?
+    pub fn has(&self, lower: &str) -> bool {
+        self.map.contains_key(lower)
+    }
+
+    /// The other ways to write a word the dictionary knows, after its own
+    /// spellings: Capitalised, joined from two words (in + box: InBox), and
+    /// ALL CAPS. Nothing for letters that are not a word.
+    pub fn case_variants(&self, typed: &str) -> Vec<String> {
+        let lower = typed.to_ascii_lowercase();
+        if lower.len() < 2 || !self.has(&lower) {
+            return Vec::new();
+        }
+        let cap = |w: &str| {
+            let mut c = w.chars();
+            c.next().map(|h| h.to_ascii_uppercase()).into_iter().chain(c).collect::<String>()
+        };
+        let mut out = vec![cap(&lower)];
+        // The split with the longest first word that leaves two real words.
+        if let Some(i) = (2..lower.len().saturating_sub(1)).rev().find(|&i| self.has(&lower[..i]) && self.has(&lower[i..])) {
+            out.push(format!("{}{}", cap(&lower[..i]), cap(&lower[i..])));
+        }
+        out.push(lower.to_ascii_uppercase());
+        out
+    }
+
     /// Spellings for what was typed, best first. At the start of a
     /// sentence a lower-case word is also offered capitalised (first).
     pub fn lookup(&self, typed: &str, sentence_start: bool) -> Vec<String> {
@@ -597,6 +623,10 @@ mod tests {
             d.add(w);
         }
         assert_eq!(d.lookup("inbox", false), ["Inbox", "inbox"]);
+        d.add("in");
+        d.add("box");
+        assert_eq!(d.case_variants("inbox"), ["Inbox", "InBox", "INBOX"]);
+        assert!(d.case_variants("claud").is_empty());
         assert_eq!(d.lookup("iphone", true), ["iPhone"]);
         assert_eq!(d.lookup("github", false), ["GitHub"]);
         assert!(d.lookup("sss", false).is_empty());
