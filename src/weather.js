@@ -113,6 +113,7 @@ function renderHours(data, now) {
   const times = (data.hourly?.time || []).map((t) => epochOf(t, offset));
   const temps = data.hourly?.temperature_2m || [];
   const codes = data.hourly?.weather_code || [];
+  const pops = data.hourly?.precipitation_probability || [];
   const sunrises = (data.daily?.sunrise || []).map((t) => epochOf(t, offset));
   const sunsets = (data.daily?.sunset || []).map((t) => epochOf(t, offset));
   const current = data.current || {};
@@ -122,6 +123,7 @@ function renderHours(data, now) {
     t: now,
     label: "现在",
     icon: iconUrl(current.weather_code, current.is_day !== 0),
+    pop: pops[Math.max(0, times.findIndex((t) => t > now) - 1)],
     value: `${round(current.temperature_2m) ?? "--"}°`,
   }];
 
@@ -135,6 +137,7 @@ function renderHours(data, now) {
       label: `${partsIn(tz, t).hour}时`,
       icon: iconUrl(codes[i], isDaylight(t, sunrises, sunsets)),
       value: `${round(temps[i]) ?? "--"}°`,
+      pop: pops[i],
     });
   }
 
@@ -159,7 +162,9 @@ function renderHours(data, now) {
 
   setHtml("hours", shown.map((e) =>
     `<div class="hour ${e.kind === "now" ? "now" : ""} ${e.kind === "event" ? "event" : ""}">` +
-    `<span class="t">${e.label}</span><img src="${e.icon}" alt="" /><span class="v">${e.value}</span></div>`
+    `<span class="t">${e.label}</span><span class="icon-cell"><img src="${e.icon}" alt="" />` +
+    (Number.isFinite(e.pop) && e.pop >= 10 ? `<span class="pop">${e.pop}%</span>` : "") +
+    `</span><span class="v">${e.value}</span></div>`
   ).join(""));
 }
 
@@ -187,7 +192,9 @@ function renderDays(data, now) {
   setHtml("days", rows.map((r) => {
     const left = ((r.lo - min) / span) * 100;
     const width = Math.max(4, ((r.hi - r.lo) / span) * 100);
-    const pop = r.pop >= 30 ? `<span class="pop">${r.pop}%</span>` : "";
+    // Every day's chance of rain (JMA's official figure in Japan); faint
+    // below 30%.
+    const pop = Number.isFinite(r.pop) ? `<span class="pop${r.pop < 30 ? " low" : ""}">${r.pop}%</span>` : "";
     return `<div class="day">
       <span class="dow">${DOW[partsIn(data.timezone, r.epoch).dow]}</span>
       <span class="icon-cell"><img src="${iconUrl(r.code, true)}" alt="" />${pop}</span>

@@ -572,7 +572,7 @@ impl Canvas {
         };
         let width = (content_w + pad * 2.0).ceil() as i32;
         let height = (bottom + pad * 1.5).ceil() as i32;
-        let shadow = (8.0 * s) as i32;
+        let shadow = (10.0 * s).ceil() as i32;
         let (w, h) = (width + shadow * 2, height + shadow * 2);
         if w > 8000 || h > 2000 || !self.reserve(w, h) {
             log(&format!("candidate window: no bitmap for {w}x{h}"));
@@ -601,13 +601,19 @@ impl Canvas {
         t.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
         let ox = shadow as f32;
         let oy = shadow as f32;
-        // Soft shadow: a few expanding translucent rounded rects.
+        // Shadow: a tight contact shadow and a wide, faint falloff (spread,
+        // drop, opacity). The old six equal layers added up to ~20% black
+        // right at the edge: a grey ring on light pages.
+        let mut layers = vec![(0.5, 0.6, 0.05), (1.5, 1.0, 0.022)];
         for i in 0..6 {
-            let e = i as f32 * 1.3 * s;
-            if let Ok(b) = t.CreateSolidColorBrush(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.035 }, None) {
+            layers.push((2.5 + i as f32 * 1.1, 1.6, 0.014 * (1.0 - i as f32 / 7.0)));
+        }
+        for (spread, drop, a) in layers {
+            let (e, dy) = (spread * s, drop * s);
+            if let Ok(b) = t.CreateSolidColorBrush(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a }, None) {
                 t.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
-                        rect: D2D_RECT_F { left: ox - e, top: oy - e + 2.0 * s, right: ox + width as f32 + e, bottom: oy + height as f32 + e + 2.0 * s },
+                        rect: D2D_RECT_F { left: ox - e, top: oy - e + dy, right: ox + width as f32 + e, bottom: oy + height as f32 + e + dy },
                         radiusX: 10.0 * s + e,
                         radiusY: 10.0 * s + e,
                     },

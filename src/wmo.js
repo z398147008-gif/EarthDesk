@@ -42,8 +42,10 @@ function iconName(kind, isDay) {
     case "partly":       return `partly-cloudy-${dn}`;
     case "overcast":     return `overcast-${dn}`;
     case "fog":          return `fog-${dn}`;
-    case "drizzle":      return `partly-cloudy-${dn}-drizzle`;
-    case "rain-light":   return `partly-cloudy-${dn}-rain`;
+    // Drizzle and light rain fall from a cloud: with a sun in the icon they
+    // read as "partly cloudy" at this size.
+    case "drizzle":      return "drizzle";
+    case "rain-light":   return "rain";
     case "rain":         return "rain";
     case "showers":      return `partly-cloudy-${dn}-rain`;
     case "sleet":        return "sleet";
