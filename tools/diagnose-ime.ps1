@@ -40,7 +40,9 @@ $log | Select-Object -Last 30 | ForEach-Object { Add ("   log: " + $_) }
 $apps = $log | ForEach-Object { if ($_ -match 'dll \[([^\]]+)\]') { $Matches[1] } } | Select-Object -Unique
 foreach ($app in $apps) {
     Add "   --- $app"
-    $log | Where-Object { $_ -like "*dll ``[$app``]*" } | Select-Object -Last 25 | ForEach-Object { Add ("   log: " + $_) }
+    # Chrome 的焦点记录(focus: ...)一个词就有几行,多留一些
+    $n = if ($app -match '^(chrome|msedge)\.exe$') { 90 } else { 25 }
+    $log | Where-Object { $_ -like "*dll ``[$app``]*" } | Select-Object -Last $n | ForEach-Object { Add ("   log: " + $_) }
 }
 Get-ChildItem $ud -Filter "rime.*" -File -ErrorAction SilentlyContinue | ForEach-Object {
     Add "   --- $($_.Name)"

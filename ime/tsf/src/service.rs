@@ -16,6 +16,9 @@
 //!   the keyboard on its empty document although the page does have a text
 //!   field focused: the keyboard is moved back to Chrome's text document
 //!   (refocus_chrome), as Chrome does when a field gets the focus.
+//! - Chrome passes the keyboard through that empty document whenever the
+//!   page's field changes, ending our composition first: such a pass is
+//!   not a new text field, what is being typed carries on (Orphan).
 
 use crate::candwin;
 use crate::client::Client;
@@ -79,6 +82,10 @@ pub struct TextService {
     /// be once our toggle is in, for the release's notice.
     alnum_caps: Cell<Option<bool>>,
     ended: edit::Ended,
+    /// When the last key went down (for the focus trace).
+    last_key: Cell<Option<std::time::Instant>>,
+    /// Focus changes told to the engine's log so far (see `trace`).
+    traced: Cell<u32>,
     /// Interfaces to ourselves, set right after creation.
     me: RefCell<Option<IUnknown>>,
 }
@@ -112,6 +119,8 @@ impl TextService {
             engine_pre: RefCell::new(Vec::new()),
             alnum_caps: Cell::new(None),
             ended: Rc::new(Cell::new(0)),
+            last_key: Cell::new(None),
+            traced: Cell::new(0),
             me: RefCell::new(None),
         });
         let unknown: IUnknown = object.to_interface();
@@ -129,6 +138,24 @@ const RETRY_TIMER: usize = 0x4552;
 /// On the notification window: the keyboard went to Chrome's empty
 /// document; put it back on its text document if the page has a field.
 const REFOCUS_TIMER: usize = 0x4553;
+
+/// How many focus changes each program run tells the engine's log.
+const TRACE_MAX: u32 = 60;
+
+/// A document, for the focus trace: Chrome's empty one, one that takes
+/// text, one that does not, or none.
+fn doc_kind(d: &windows_core::Ref<'_, ITfDocumentMgr>) -> &'static str {
+    let Some(top) = d.as_ref().and_then(|d| unsafe { d.GetTop() }.ok()) else {
+        return if d.is_null() { "none" } else { "no context" };
+    };
+    if edit::is_empty_doc(&top) {
+        "empty"
+    } else if edit::writable(&top) {
+        "text"
+    } else {
+        "read-only"
+    }
+}
 
 unsafe extern "system" fn notify_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if msg == WM_TIMER && wp.0 == REFOCUS_TIMER {
@@ -247,6 +274,41 @@ impl TextService {
         if let Ok(mut c) = self.client.try_borrow_mut() {
             c.tell(|session| Request::Note { session, message: message.to_string() });
         }
+    }
+
+    /// Focus changes for the engine's log: the first few of each program
+    /// run only (Chrome makes one per word in some pages).
+    fn trace(&self, message: impl FnOnce() -> String) {
+        let n = self.traced.get();
+        if n < TRACE_MAX {
+            self.traced.set(n + 1);
+            self.note(&message());
+        }
+    }
+
+    /// What is being typed, for the focus trace.
+    fn typing_state(&self) -> String {
+        let composing = self.composition.try_borrow().map(|c| c.is_some()).unwrap_or(false);
+        let orphan = self.orphan.try_borrow().map(|o| o.is_some()).unwrap_or(false);
+        let what = if composing {
+            "composing"
+        } else if orphan {
+            "cut-off composition waiting"
+        } else if self.engine_pre.try_borrow().map(|p| !p.is_empty()).unwrap_or(false) {
+            "engine has a spelling"
+        } else {
+            "idle"
+        };
+        match self.last_key.get() {
+            Some(t) => format!("{what}, last key {} ms ago", t.elapsed().as_millis()),
+            None => what.to_string(),
+        }
+    }
+
+    /// The keyboard's document is Chrome's empty one now.
+    fn on_empty_doc(&self) -> bool {
+        let Some(tm) = self.thread_mgr.try_borrow().ok().and_then(|t| t.clone()) else { return false };
+        unsafe { tm.GetFocus().and_then(|d| d.GetTop()) }.map(|c| edit::is_empty_doc(&c)).unwrap_or(false)
     }
 
     /// false: the program's text field takes no text, everything dropped.
@@ -668,7 +730,10 @@ impl TextService {
         if !edit::is_empty_doc(&top) {
             return None;
         }
-        let field = edit::chrome_field(self.tid.get(), &tm, &top)?;
+        let Some(field) = edit::chrome_field(self.tid.get(), &tm, &top) else {
+            self.trace(|| format!("focus: still on Chrome's empty document, no text field on the page ({})", self.typing_state()));
+            return None;
+        };
         let doc = unsafe { field.GetDocumentMgr() }.ok()?;
         self.refocusing.set(true);
         let r = unsafe { tm.SetFocus(&doc) };
@@ -783,6 +848,14 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 c.tell(|session| Request::Focus { session, on });
             }
             if !foreground.as_bool() {
+                // Chrome's empty document (keyboard disabled) on its way
+                // through: the same text field, typing carries on (see
+                // ITfThreadMgrEventSink::OnSetFocus).
+                if self.on_empty_doc() {
+                    self.trace(|| format!("keyboard off while on Chrome's empty document: kept ({})", self.typing_state()));
+                    candwin::hide();
+                    return Ok(());
+                }
                 self.reset();
             }
             Ok(())
@@ -792,6 +865,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     fn OnTestKeyDown(&self, pic: windows_core::Ref<'_, ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         guard(Ok(false.into()), || {
             self.up_done.set(None);
+            self.last_key.set(Some(std::time::Instant::now()));
             if self.test_pending.get() {
                 return Ok(true.into());
             }
@@ -804,6 +878,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     fn OnKeyDown(&self, pic: windows_core::Ref<'_, ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         guard(Ok(false.into()), || {
             self.up_done.set(None);
+            self.last_key.set(Some(std::time::Instant::now()));
             if self.test_pending.replace(false) {
                 let deferred = self.deferred.borrow_mut().take();
                 if let Some((state, adopt, ctx)) = deferred {
@@ -860,10 +935,42 @@ impl ITfThreadMgrEventSink_Impl for TextService_Impl {
     fn OnUninitDocumentMgr(&self, _pdim: windows_core::Ref<'_, ITfDocumentMgr>) -> Result<()> {
         Ok(())
     }
-    fn OnSetFocus(&self, focus: windows_core::Ref<'_, ITfDocumentMgr>, _prev: windows_core::Ref<'_, ITfDocumentMgr>) -> Result<()> {
+    fn OnSetFocus(&self, focus: windows_core::Ref<'_, ITfDocumentMgr>, prev: windows_core::Ref<'_, ITfDocumentMgr>) -> Result<()> {
         guard(Ok(()), || {
             // Our own move (refocus_chrome): the same text field.
             if self.refocusing.get() {
+                return Ok(());
+            }
+            let empty = |d: &windows_core::Ref<'_, ITfDocumentMgr>| d.as_ref().and_then(|d| unsafe { d.GetTop() }.ok()).map(|c| edit::is_empty_doc(&c)).unwrap_or(false);
+            let (to_empty, from_empty) = (empty(&focus), empty(&prev));
+            // Programs with Chrome's empty document only (it shows up in
+            // the first change): the others' focus changes are no news.
+            if to_empty || from_empty || self.traced.get() > 0 {
+                self.trace(|| format!("focus: {} -> {} ({})", doc_kind(&prev), doc_kind(&focus), self.typing_state()));
+            }
+            if to_empty || from_empty {
+                // Chrome passes the keyboard through its empty document
+                // whenever the page's field changes in any way (in the Inbox
+                // diary: as text goes in), ending our composition first:
+                // most often the same field, typing goes on. The cut-off
+                // text waits for the next key (Orphan), which carries on
+                // over it if the caret is still right after it and drops it
+                // otherwise — dropping it here left the half-typed letters in
+                // the text. Only the candidate window goes meanwhile.
+                candwin::hide();
+                if let Ok(mut c) = self.client.try_borrow_mut() {
+                    let on = !to_empty;
+                    c.tell(|session| Request::Focus { session, on });
+                }
+                // Still on the empty document a moment later with a field on
+                // the page: we move the keyboard back (refocus_chrome) —
+                // before the next key, not during Chrome's own switching.
+                let n = self.notify.get();
+                if to_empty && !n.0.is_null() {
+                    unsafe {
+                        let _ = SetTimer(Some(n), REFOCUS_TIMER, 30, None);
+                    }
+                }
                 return Ok(());
             }
             // Moving to another text field: whatever was being typed is
@@ -872,17 +979,6 @@ impl ITfThreadMgrEventSink_Impl for TextService_Impl {
             if let Ok(mut c) = self.client.try_borrow_mut() {
                 let on = !focus.is_null();
                 c.tell(|session| Request::Focus { session, on });
-            }
-            // Chrome's empty document: Chrome moves on to its text document
-            // right away when a field is focused. If it is still there a
-            // moment later with a field on the page, we move it
-            // (refocus_chrome) — before the next key, not during it.
-            let empty = focus.as_ref().and_then(|d| unsafe { d.GetTop() }.ok()).map(|c| edit::is_empty_doc(&c)).unwrap_or(false);
-            let n = self.notify.get();
-            if empty && !n.0.is_null() {
-                unsafe {
-                    let _ = SetTimer(Some(n), REFOCUS_TIMER, 30, None);
-                }
             }
             Ok(())
         })
