@@ -19,7 +19,7 @@
 #![cfg(windows)]
 
 pub use ime_proto::Cands;
-use windows::core::{w, Interface, PCWSTR};
+use windows::core::{w, Interface, BOOL, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
@@ -195,13 +195,13 @@ fn sky_colors(k: Sky, day: bool) -> (D2D1_COLOR_F, D2D1_COLOR_F) {
         (Sky::Clear, false) => (0xe2e0f6, 0x6760d2),
         (Sky::Partly, true) => (0xdcebf9, 0x3a84cf),
         (Sky::Partly, false) => (0xe0e0f1, 0x6461c4),
-        (Sky::Cloudy, true) => (0xe2e7ee, 0x5b7897),
-        (Sky::Cloudy, false) => (0xdddfea, 0x5f6690),
+        (Sky::Cloudy, true) => (0xd5dde8, 0x5b7897),
+        (Sky::Cloudy, false) => (0xd6d8e6, 0x5f6690),
         (Sky::Fog, _) => (0xe8eaed, 0x6f7d8a),
         (Sky::Drizzle, _) => (0xdbe5ef, 0x3f74aa),
-        (Sky::Rain, _) => (0xd2ddea, 0x376aa3),
-        (Sky::Snow, _) => (0xebf1f8, 0x5a8bc0),
-        (Sky::Thunder, _) => (0xdbd8e8, 0x6556b0),
+        (Sky::Rain, _) => (0xc9d6e6, 0x376aa3),
+        (Sky::Snow, _) => (0xdde6f1, 0x5a8bc0),
+        (Sky::Thunder, _) => (0xcfcce0, 0x6556b0),
     };
     (color(bg, 0.98), color(accent, 1.0))
 }
@@ -261,6 +261,36 @@ pub struct Canvas {
     hits: HitMap,
     shown: bool,
     retrying: bool,
+    /// The weather skin moves: the last view is drawn again every frame.
+    t0: std::time::Instant,
+    last: Option<(Cands, Caret)>,
+    animating: bool,
+    ticking: bool,
+}
+
+/// The timer a window drawn by a `Canvas` must hand to `Canvas::tick`.
+pub const ANIM_TIMER: usize = 0x4544;
+/// About 25 frames a second: smooth rain, little work.
+const FRAME_MS: u32 = 40;
+
+/// Windows' "show animations" setting (off: the weather stands still).
+fn motion_allowed() -> bool {
+    let mut on = BOOL(1);
+    unsafe {
+        let _ = SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, Some(&mut on as *mut BOOL as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0));
+    }
+    on.as_bool()
+}
+
+/// Where the middle of the glyphs is, from the top of a text layout: the
+/// middle of the ideographic em box (baseline - 0.38 em). Centering on this,
+/// not on the line box, puts 你好 and the digits in the middle of the
+/// highlight (YaHei's line box has a deep descent below the characters).
+unsafe fn ink_mid(l: &IDWriteTextLayout, size: f32) -> f32 {
+    let mut m = [DWRITE_LINE_METRICS::default(); 1];
+    let mut n = 0u32;
+    let base = if l.GetLineMetrics(Some(&mut m), &mut n).is_ok() && n > 0 { m[0].baseline } else { size };
+    base - 0.38 * size
 }
 
 fn dc_props() -> D2D1_RENDER_TARGET_PROPERTIES {
@@ -328,6 +358,10 @@ impl Canvas {
             hits: HitMap::default(),
             shown: false,
             retrying: false,
+            t0: std::time::Instant::now(),
+            last: None,
+            animating: false,
+            ticking: false,
         })
     }
 
@@ -338,9 +372,32 @@ impl Canvas {
     /// # Safety
     /// `hwnd` is the window this canvas draws.
     pub unsafe fn hide(&mut self, hwnd: HWND) {
+        if self.animating {
+            let _ = KillTimer(Some(hwnd), ANIM_TIMER);
+            self.animating = false;
+        }
+        self.last = None;
         if self.shown {
             let _ = ShowWindow(hwnd, SW_HIDE);
             self.shown = false;
+        }
+    }
+
+    /// ANIM_TIMER fired: the next frame of the weather.
+    ///
+    /// # Safety
+    /// `hwnd` is the window this canvas draws, owned by this thread.
+    pub unsafe fn tick(&mut self, hwnd: HWND, log: &dyn Fn(&str)) {
+        match self.last.clone() {
+            Some((view, caret)) if self.shown && self.animating => {
+                self.ticking = true;
+                self.draw(hwnd, &view, Some(caret), log);
+                self.ticking = false;
+            }
+            _ => {
+                let _ = KillTimer(Some(hwnd), ANIM_TIMER);
+                self.animating = false;
+            }
         }
     }
 
@@ -446,7 +503,9 @@ impl Canvas {
         // Measure. The first line: the letters as typed (when they read
         // differently), the reading, and the weather in the corner.
         let pad = 8.0 * s;
-        let gap = 14.0 * s;
+        let gap = 18.0 * s;
+        // Font sizes (see fmt): candidates, small text, labels.
+        let (zc, zs, zl) = (17.0 * s, 12.5 * s, 12.0 * s);
         let vgap = 6.0 * s;
         let typed = if view.typed.is_empty() { None } else { self.layout(&view.typed, &flabel) };
         let typed_w = typed.as_ref().map(|t| t.1 + 7.0 * s).unwrap_or(0.0);
@@ -455,6 +514,7 @@ impl Canvas {
         let corner_w = corner.as_ref().map(|c| c.1 + 16.0 * s).unwrap_or(0.0);
         let head_w = typed_w + pre.as_ref().map(|p| p.1).unwrap_or(0.0) + corner_w;
         let pre_h = pre.as_ref().map(|p| p.2).unwrap_or(0.0).max(typed.as_ref().map(|t| t.2).unwrap_or(0.0));
+        let head_mid = pad + pre_h * 0.5;
         let row_y = pad + pre_h + 3.0 * s;
         let mut row_h: f32 = 0.0;
         let mut measured = Vec::new();
@@ -540,27 +600,32 @@ impl Canvas {
         if let Ok(b) = t.CreateSolidColorBrush(&pal.bg, None) {
             t.FillRoundedRectangle(&card, &b);
         }
-        self.paint_skin(&lk, &card.rect, corner_w, s);
+        let motion = !lk.hours.is_empty() && motion_allowed();
+        let now = if motion { self.t0.elapsed().as_secs_f32() } else { 0.0 };
+        self.paint_skin(&lk, &card.rect, now, s);
         let t = &self.target;
         if let Ok(b) = t.CreateSolidColorBrush(&pal.border, None) {
             t.DrawRoundedRectangle(&card, &b, 1.0, None);
         }
         let brush = |c: &D2D1_COLOR_F| t.CreateSolidColorBrush(c, None).ok();
         if let (Some((l, _, lh)), Some(b)) = (&typed, brush(&pal.text)) {
-            t.DrawTextLayout(Vector2 { X: ox + pad, Y: oy + pad + (pre_h - lh) * 0.6 }, l, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            let _ = lh;
+            t.DrawTextLayout(Vector2 { X: ox + pad, Y: oy + head_mid - ink_mid(l, zl) }, l, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
         }
-        if let (Some((l, _, lh)), Some(b)) = (&pre, brush(&pal.dim)) {
-            t.DrawTextLayout(Vector2 { X: ox + pad + typed_w, Y: oy + pad + (pre_h - lh) * 0.6 }, l, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        if let (Some((l, _, _)), Some(b)) = (&pre, brush(&pal.dim)) {
+            t.DrawTextLayout(Vector2 { X: ox + pad + typed_w, Y: oy + head_mid - ink_mid(l, zs) }, l, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
         }
-        if let (Some((l, lw, lh)), Some(b)) = (&corner, brush(&pal.dim)) {
-            t.DrawTextLayout(Vector2 { X: ox + width as f32 - pad - lw, Y: oy + pad + (pre_h - lh) * 0.6 }, l, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        if let (Some((l, lw, _)), Some(b)) = (&corner, brush(&pal.dim)) {
+            t.DrawTextLayout(Vector2 { X: ox + width as f32 - pad - lw, Y: oy + head_mid - ink_mid(l, zs) }, l, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
         }
         let mut hits = HitMap::default();
         for (i, (x, y, iw, l, tx, c)) in items.iter().enumerate() {
             let hl = i as i32 == view.highlighted;
             let cx = ox + x;
             let cy = oy + y;
-            let cell = (cx - 5.0 * s, cy - 2.0 * s, iw + 10.0 * s, row_h + 4.0 * s);
+            // The highlight: the same margin on every side of the ink.
+            let cell = (cx - 7.0 * s, cy - 2.0 * s, iw + 14.0 * s, row_h + 4.0 * s);
+            let mid = cy + row_h * 0.5;
             if hl {
                 if let Some(b) = brush(&pal.hl_bg) {
                     t.FillRoundedRectangle(
@@ -575,14 +640,14 @@ impl Canvas {
             }
             let (lc, tc) = if hl { (pal.hl_text, pal.hl_text) } else { (pal.label, pal.text) };
             if let Some(b) = brush(&lc) {
-                t.DrawTextLayout(Vector2 { X: cx, Y: cy + (row_h - l.2) * 0.62 }, &l.0, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                t.DrawTextLayout(Vector2 { X: cx, Y: mid - ink_mid(&l.0, zl) }, &l.0, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
             }
             let tx0 = cx + l.1 + 4.0 * s;
             if let Some(b) = brush(&tc) {
-                t.DrawTextLayout(Vector2 { X: tx0, Y: cy }, &tx.0, &b, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+                t.DrawTextLayout(Vector2 { X: tx0, Y: mid - ink_mid(&tx.0, zc) }, &tx.0, &b, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
             }
             if let (Some(c), Some(b)) = (c, brush(if hl { &pal.hl_text } else { &pal.dim })) {
-                t.DrawTextLayout(Vector2 { X: tx0 + tx.1 + 4.0 * s, Y: cy + (row_h - c.2) * 0.62 }, &c.0, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                t.DrawTextLayout(Vector2 { X: tx0 + tx.1 + 4.0 * s, Y: mid - ink_mid(&c.0, zs) }, &c.0, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
             }
             hits.cands.push(cell);
         }
@@ -591,9 +656,9 @@ impl Canvas {
         let ay = oy + arrows_y + row_h * 0.5;
         let arrows: &[(&str, bool)] = if view.flash { &[] } else { &[("‹", view.page_no > 0), ("›", !view.last_page)] };
         for (k, (sym, enabled)) in arrows.iter().enumerate() {
-            if let (Some((l, lw, lh)), Some(b)) = (self.layout(sym, &fcand), brush(if *enabled { &pal.text } else { &pal.border })) {
+            if let (Some((l, lw, _)), Some(b)) = (self.layout(sym, &fcand), brush(if *enabled { &pal.text } else { &pal.border })) {
                 let x0 = ax + k as f32 * arrows_w * 0.5 + (arrows_w * 0.5 - lw) * 0.5;
-                t.DrawTextLayout(Vector2 { X: x0, Y: ay - lh * 0.55 }, &l, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                t.DrawTextLayout(Vector2 { X: x0, Y: ay - ink_mid(&l, zc) }, &l, &b, D2D1_DRAW_TEXT_OPTIONS_NONE);
                 let r = (ax + k as f32 * arrows_w * 0.5, oy + arrows_y - 2.0 * s, arrows_w * 0.5, row_h + 4.0 * s);
                 if *enabled {
                     if k == 0 {
@@ -630,10 +695,18 @@ impl Canvas {
         if let Err(e) = UpdateLayeredWindow(hwnd, None, Some(&dst), Some(&size), Some(self.dc), Some(&src), COLORREF(0), Some(&blend), ULW_ALPHA) {
             log(&format!("candidate window: UpdateLayeredWindow {e}"));
         }
+        self.last = Some((view.clone(), caret));
+        if motion && !self.animating {
+            let _ = SetTimer(Some(hwnd), ANIM_TIMER, FRAME_MS, None);
+            self.animating = true;
+        } else if !motion && self.animating {
+            let _ = KillTimer(Some(hwnd), ANIM_TIMER);
+            self.animating = false;
+        }
         if !self.shown {
             let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
             self.shown = true;
-        } else {
+        } else if !self.ticking {
             // Stay above the window being typed in, which may itself be
             // topmost.
             let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -641,10 +714,77 @@ impl Canvas {
     }
 }
 
+/// 0 at `a`, 1 at `b`, smooth in between.
+fn smooth(a: f32, b: f32, x: f32) -> f32 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// One hour's stretch of the bar, for its weather.
+struct Stretch {
+    r: D2D_RECT_F,
+    /// Neighbouring hours on the left / right (the weather fades into
+    /// theirs instead of stopping at a line).
+    open_l: bool,
+    open_r: bool,
+    seed: u32,
+}
+
+impl Stretch {
+    fn w(&self) -> f32 {
+        self.r.right - self.r.left
+    }
+    fn h(&self) -> f32 {
+        self.r.bottom - self.r.top
+    }
+    /// How strongly something at x shows (fading out towards a neighbour).
+    fn fade(&self, x: f32) -> f32 {
+        let edge = self.w() * 0.22;
+        let l = if self.open_l { smooth(self.r.left - edge * 0.3, self.r.left + edge, x) } else { 1.0 };
+        let r = if self.open_r { 1.0 - smooth(self.r.right - edge, self.r.right + edge * 0.3, x) } else { 1.0 };
+        l * r
+    }
+}
+
 impl Canvas {
-    /// The skin's background and weather, clipped to the card.
-    /// `corner`: the width the weather label takes at the top right.
-    unsafe fn paint_skin(&self, lk: &Look, card: &D2D_RECT_F, corner: f32, s: f32) {
+    /// A soft round light: `c` at the centre fading to nothing at the rim.
+    unsafe fn glow(&self, x: f32, y: f32, rx: f32, ry: f32, c: D2D1_COLOR_F) {
+        if c.a <= 0.003 || rx < 0.5 || ry < 0.5 {
+            return;
+        }
+        let t = &self.target;
+        let clear = D2D1_COLOR_F { a: 0.0, ..c };
+        let stops = [
+            D2D1_GRADIENT_STOP { position: 0.0, color: c },
+            D2D1_GRADIENT_STOP { position: 0.45, color: D2D1_COLOR_F { a: c.a * 0.55, ..c } },
+            D2D1_GRADIENT_STOP { position: 1.0, color: clear },
+        ];
+        let Ok(coll) = t.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP) else { return };
+        let props = D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES { center: Vector2 { X: x, Y: y }, gradientOriginOffset: Vector2 { X: 0.0, Y: 0.0 }, radiusX: rx, radiusY: ry };
+        if let Ok(b) = t.CreateRadialGradientBrush(&props, None, &coll) {
+            t.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: rx, radiusY: ry }, &b);
+        }
+    }
+
+    /// A line fading from `c` at `a` to nothing at `b` (rain, light, meteors).
+    unsafe fn streak(&self, a: (f32, f32), b: (f32, f32), width: f32, c: D2D1_COLOR_F, head_at_a: bool) {
+        if c.a <= 0.003 {
+            return;
+        }
+        let t = &self.target;
+        let clear = D2D1_COLOR_F { a: 0.0, ..c };
+        let (c0, c1) = if head_at_a { (c, clear) } else { (clear, c) };
+        let stops = [D2D1_GRADIENT_STOP { position: 0.0, color: c0 }, D2D1_GRADIENT_STOP { position: 1.0, color: c1 }];
+        let Ok(coll) = t.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP) else { return };
+        let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: a.0, Y: a.1 }, endPoint: Vector2 { X: b.0, Y: b.1 } };
+        if let Ok(br) = t.CreateLinearGradientBrush(&props, None, &coll) {
+            t.DrawLine(Vector2 { X: a.0, Y: a.1 }, Vector2 { X: b.0, Y: b.1 }, &br, width, None);
+        }
+    }
+
+    /// The skin's background and weather, clipped to the card. `now`:
+    /// seconds, for the weather's movement.
+    unsafe fn paint_skin(&self, lk: &Look, card: &D2D_RECT_F, now: f32, s: f32) {
         if lk.stops.is_empty() && lk.hours.is_empty() {
             return;
         }
@@ -688,108 +828,167 @@ impl Canvas {
                 t.FillRectangle(card, &b);
             }
         }
+        for (i, &(k, d)) in lk.hours.iter().take(n).enumerate() {
+            let x0 = card.left + seg * i as f32;
+            let st = Stretch { r: D2D_RECT_F { left: x0, top: card.top, right: x0 + seg, bottom: card.bottom }, open_l: i > 0, open_r: i + 1 < n, seed: i as u32 * 7919 + k as u32 * 131 };
+            self.paint_hour(k, d, &st, now, s);
+        }
         // A soft sheen from the top, so the tint reads as sky, not paint.
-        let sheen = [D2D1_GRADIENT_STOP { position: 0.0, color: color(0xffffff, 0.45) }, D2D1_GRADIENT_STOP { position: 1.0, color: color(0xffffff, 0.0) }];
+        let sheen = [D2D1_GRADIENT_STOP { position: 0.0, color: color(0xffffff, 0.40) }, D2D1_GRADIENT_STOP { position: 1.0, color: color(0xffffff, 0.0) }];
         if let Ok(coll) = t.CreateGradientStopCollection(&sheen, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP) {
-            let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: card.top }, endPoint: Vector2 { X: 0.0, Y: card.top + h * 0.7 } };
+            let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: Vector2 { X: 0.0, Y: card.top }, endPoint: Vector2 { X: 0.0, Y: card.top + h * 0.6 } };
             if let Ok(b) = t.CreateLinearGradientBrush(&props, None, &coll) {
                 t.FillRectangle(card, &b);
             }
         }
-        for (i, &(k, d)) in lk.hours.iter().take(n).enumerate() {
-            let x0 = card.left + seg * i as f32;
-            // The sun / moon keeps clear of the label.
-            let keep = (x0 + seg - (card.right - corner)).max(0.0);
-            self.paint_hour(k, d, D2D_RECT_F { left: x0, top: card.top, right: x0 + seg, bottom: card.bottom }, keep, i as u32, s);
-        }
         t.PopLayer();
     }
 
-    /// One hour's weather in its stretch of the bar. Kept faint: the
-    /// candidates are read over it.
-    unsafe fn paint_hour(&self, k: Sky, day: bool, r: D2D_RECT_F, keep: f32, seed: u32, s: f32) {
-        let t = &self.target;
-        let w = r.right - r.left;
-        let h = r.bottom - r.top;
-        let fill = |c: D2D1_COLOR_F, x: f32, y: f32, rx: f32, ry: f32| {
-            if let Ok(b) = t.CreateSolidColorBrush(&c, None) {
-                t.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: rx, radiusY: ry }, &b);
-            }
-        };
-        let line = |c: D2D1_COLOR_F, a: (f32, f32), b: (f32, f32), width: f32| {
-            if let Ok(br) = t.CreateSolidColorBrush(&c, None) {
-                t.DrawLine(Vector2 { X: a.0, Y: a.1 }, Vector2 { X: b.0, Y: b.1 }, &br, width, None);
-            }
-        };
-        let bg = sky_colors(k, day).0;
-        // Sun or moon, top right of the stretch.
-        let (cx, cy) = ((r.right - keep - 22.0 * s).max(r.left + 16.0 * s), r.top + 16.0 * s);
-        let body = matches!(k, Sky::Clear | Sky::Partly);
-        if body && day {
-            fill(color(0xffc53d, 0.12), cx, cy, 17.0 * s, 17.0 * s);
-            fill(color(0xffc53d, 0.18), cx, cy, 12.0 * s, 12.0 * s);
-            fill(color(0xffc53d, 0.55), cx, cy, 7.5 * s, 7.5 * s);
-        } else if body {
-            fill(color(0xf4d27a, 0.25), cx, cy, 12.0 * s, 12.0 * s);
-            fill(color(0xf1cf6e, 0.75), cx, cy, 7.0 * s, 7.0 * s);
-            fill(bg, cx + 3.6 * s, cy - 2.4 * s, 6.2 * s, 6.2 * s);
-            for j in 0..4u32 {
-                let sx = r.left + w * (0.12 + 0.7 * hash(seed * 31 + j * 7));
-                let sy = r.top + h * (0.15 + 0.7 * hash(seed * 17 + j * 13 + 1));
-                fill(color(0x8d8fd8, 0.35), sx, sy, 1.3 * s, 1.3 * s);
-            }
+    /// Soft clouds drifting to the right (wrapping round the stretch),
+    /// between `top` and `bottom` (fractions of the height).
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn clouds(&self, st: &Stretch, now: f32, s: f32, count: u32, tint: u32, alpha: f32, top: f32, bottom: f32) {
+        let (w, h) = (st.w(), st.h());
+        for j in 0..count {
+            let q = st.seed * 13 + j * 29;
+            let speed = (3.0 + 5.0 * hash(q)) * s;
+            let span = w + 60.0 * s;
+            let x = st.r.left - 30.0 * s + (hash(q + 1) * span + now * speed).rem_euclid(span);
+            let y = st.r.top + h * (top + (bottom - top) * hash(q + 2));
+            let size = (16.0 + 14.0 * hash(q + 3)) * s;
+            // Breathing a little, like real cloud edges.
+            let b = 1.0 + 0.06 * (now * (0.3 + 0.3 * hash(q + 4)) + j as f32).sin();
+            let a = alpha * st.fade(x);
+            // A shaded underside, then the lit cloud over it.
+            self.glow(x, y + size * 0.45, size * 2.0 * b, size * 0.7 * b, color(0x7d8fa8, a * 0.22));
+            self.glow(x, y, size * 1.9 * b, size * 0.8 * b, color(tint, a));
+            self.glow(x - size * 0.7, y + size * 0.15, size * 1.1, size * 0.55, color(tint, a * 0.8));
+            self.glow(x + size * 0.8, y + size * 0.1, size * 1.2, size * 0.6, color(tint, a * 0.8));
         }
-        // Clouds.
-        let cloud = |x: f32, y: f32, z: f32, c: D2D1_COLOR_F| {
-            fill(color(0x8796a8, 0.10), x + 1.0 * s, y + 3.0 * s, 17.0 * z, 6.0 * z);
-            fill(c, x - 8.0 * z, y, 8.0 * z, 6.0 * z);
-            fill(c, x + 1.0 * z, y - 4.0 * z, 9.0 * z, 8.0 * z);
-            fill(c, x + 10.0 * z, y + 0.5 * z, 7.0 * z, 5.5 * z);
-            fill(c, x + 1.0 * z, y + 2.5 * z, 15.0 * z, 4.0 * z);
-        };
-        let white = color(0xffffff, 0.9);
-        let grey = color(0xf7f8fb, 0.85);
-        let mid = r.top + h * 0.46;
-        match k {
-            Sky::Partly => cloud(cx - 10.0 * s, cy + 9.0 * s, 1.1 * s, white),
-            Sky::Cloudy | Sky::Drizzle | Sky::Rain | Sky::Snow | Sky::Thunder => {
-                cloud(r.left + w * 0.28, mid, 1.35 * s, grey);
-                cloud(r.left + w * 0.74, mid - 5.0 * s, 1.1 * s, grey);
-            }
-            _ => {}
+    }
+
+    /// Falling rain: thin streaks with a little wind.
+    unsafe fn rain(&self, st: &Stretch, now: f32, s: f32, count: u32, len: f32, alpha: f32) {
+        let (w, h) = (st.w(), st.h());
+        let len = len * s;
+        for j in 0..count {
+            let q = st.seed * 31 + j * 17;
+            let speed = (170.0 + 90.0 * hash(q)) * s;
+            let fall = h + len * 2.0;
+            let y = st.r.top - len + (hash(q + 1) * fall + now * speed).rem_euclid(fall);
+            let x = st.r.left + w * hash(q + 2) - (y - st.r.top) * 0.22;
+            let a = alpha * (0.6 + 0.4 * hash(q + 3)) * st.fade(x);
+            self.streak((x, y), (x + len * 0.22, y - len), 1.25 * s, color(0x355f98, a), true);
         }
-        match k {
-            Sky::Fog => {
-                for j in 0..3 {
-                    let y = r.top + h * (0.35 + 0.22 * j as f32);
-                    let off = hash(seed * 5 + j) * w * 0.2;
-                    line(color(0xffffff, 0.7), (r.left + off, y), (r.right - w * 0.15 + off, y), 3.0 * s);
+    }
+
+    /// One hour's weather in its stretch of the bar, moving with `now`.
+    /// Everything is light and air, no drawn symbols: kept faint because
+    /// the candidates are read over it.
+    unsafe fn paint_hour(&self, k: Sky, day: bool, st: &Stretch, now: f32, s: f32) {
+        let (w, h) = (st.w(), st.h());
+        let r = st.r;
+        match (k, day) {
+            (Sky::Clear | Sky::Partly, true) => {
+                // Sunlight from above the top right: a warm, slowly
+                // breathing glow and soft rays turning a little.
+                let (sx, sy) = (r.right - w * 0.16, r.top - h * 0.1);
+                let pulse = 1.0 + 0.05 * (now * 0.7 + st.seed as f32).sin();
+                let a = if k == Sky::Clear { 1.0 } else { 0.7 };
+                let f = st.fade(sx);
+                self.glow(sx, sy, h * 1.7 * pulse, h * 1.5 * pulse, color(0xfff0b8, 1.0 * a * f));
+                self.glow(sx, sy, h * 0.75 * pulse, h * 0.7 * pulse, color(0xffd966, 0.75 * a * f));
+                for j in 0..5u32 {
+                    let q = st.seed * 7 + j;
+                    let ang = 1.85 + 0.32 * j as f32 + 0.05 * (now * (0.18 + 0.1 * hash(q)) + j as f32).sin();
+                    let len = w * (0.8 + 0.4 * hash(q + 1));
+                    let end = (sx + ang.cos() * len, sy + ang.sin() * len);
+                    let ra = 0.26 * a * (0.55 + 0.45 * (now * (0.45 + 0.3 * hash(q + 2)) + j as f32 * 1.7).sin()) * st.fade(end.0.max(r.left));
+                    self.streak((sx, sy), end, (9.0 + 6.0 * hash(q + 3)) * s, color(0xfffbe8, ra), true);
+                }
+                // Motes in the light, drifting up.
+                for j in 0..5u32 {
+                    let q = st.seed * 11 + j * 5;
+                    let rise = (6.0 + 6.0 * hash(q)) * s;
+                    let y = r.bottom - (hash(q + 1) * h + now * rise).rem_euclid(h);
+                    let x = r.left + w * (0.3 + 0.7 * hash(q + 2)) + 3.0 * s * (now * 0.8 + j as f32).sin();
+                    let tw = 0.5 + 0.5 * (now * (1.5 + hash(q + 3)) + j as f32).sin();
+                    self.glow(x, y, 2.4 * s, 2.4 * s, color(0xffffff, 0.8 * tw * a * st.fade(x)));
+                }
+                if k == Sky::Partly {
+                    self.clouds(st, now, s, 2, 0xffffff, 0.85, 0.35, 0.7);
                 }
             }
-            Sky::Drizzle | Sky::Rain | Sky::Thunder => {
-                let (count, len, a) = if k == Sky::Drizzle { (9, 4.0, 0.25) } else { (15, 7.0, 0.32) };
-                for j in 0..count {
-                    let x = r.left + w * hash(seed * 101 + j);
-                    let y = mid + 4.0 * s + (r.bottom - mid - 8.0 * s) * hash(seed * 67 + j * 3 + 2);
-                    line(color(0x4a73a3, a), (x, y), (x - 2.0 * s, y + len * s), 1.1 * s);
+            (Sky::Clear | Sky::Partly, false) => {
+                // Moonlight and twinkling stars; now and then a meteor.
+                let (mx, my) = (r.right - w * 0.2, r.top - h * 0.2);
+                let f = st.fade(mx);
+                self.glow(mx, my, h * 1.2, h * 1.1, color(0xfbf8ff, 0.9 * f));
+                for j in 0..12u32 {
+                    let q = st.seed * 19 + j * 3;
+                    let x = r.left + w * hash(q);
+                    let y = r.top + h * (0.1 + 0.8 * hash(q + 1));
+                    let tw = 0.35 + 0.65 * (0.5 + 0.5 * (now * (1.0 + 2.0 * hash(q + 2)) + 6.3 * hash(q + 3)).sin());
+                    let z = (1.6 + 1.6 * hash(q + 4)) * s;
+                    self.glow(x, y, z, z, color(0x6f74d0, 0.75 * tw * st.fade(x)));
                 }
-                if k == Sky::Thunder {
-                    let (bx, by) = (r.left + w * 0.52, mid + 2.0 * s);
-                    let bolt = color(0xf2b705, 0.6);
-                    line(bolt, (bx, by), (bx - 4.0 * s, by + 9.0 * s), 1.8 * s);
-                    line(bolt, (bx - 4.0 * s, by + 9.0 * s), (bx + 1.0 * s, by + 9.0 * s), 1.8 * s);
-                    line(bolt, (bx + 1.0 * s, by + 9.0 * s), (bx - 3.0 * s, by + 18.0 * s), 1.8 * s);
+                let period = 7.0 + 5.0 * hash(st.seed);
+                let ph = (now + period * hash(st.seed + 1)).rem_euclid(period);
+                if ph < 0.9 {
+                    let p = ph / 0.9;
+                    let x = r.left + w * (0.35 + 0.5 * hash(st.seed + (now / period) as u32)) - p * w * 0.35;
+                    let y = r.top + h * (0.12 + 0.45 * p);
+                    let a = 0.8 * (1.0 - p) * st.fade(x);
+                    self.streak((x, y), (x + 26.0 * s, y - 12.0 * s), 1.4 * s, color(0x8a8fe0, a), true);
+                }
+                if k == Sky::Partly {
+                    self.clouds(st, now, s, 2, 0xf6f5ff, 0.8, 0.3, 0.7);
                 }
             }
-            Sky::Snow => {
-                for j in 0..12 {
-                    let x = r.left + w * hash(seed * 211 + j);
-                    let y = mid + 3.0 * s + (r.bottom - mid - 5.0 * s) * hash(seed * 89 + j * 5 + 4);
-                    let z = (1.1 + 0.9 * hash(seed * 7 + j)) * s;
-                    fill(color(0x8fa9c8, 0.4), x, y, z, z);
+            (Sky::Cloudy, _) => self.clouds(st, now, s, 4, 0xffffff, 0.8, 0.15, 0.85),
+            (Sky::Fog, _) => {
+                // Banks of mist drifting past each other.
+                for j in 0..4u32 {
+                    let q = st.seed * 23 + j * 7;
+                    let y = r.top + h * (0.2 + 0.22 * j as f32);
+                    let x = r.left + w * 0.5 + w * 0.35 * (now * (0.05 + 0.06 * hash(q)) + 6.3 * hash(q + 1)).sin();
+                    self.glow(x, y, w * 0.75, h * 0.2, color(0xffffff, 0.75 * st.fade(x)));
                 }
             }
-            _ => {}
+            (Sky::Drizzle, _) => {
+                self.clouds(st, now, s, 3, 0xf3f5f8, 0.75, 0.05, 0.35);
+                self.rain(st, now, s, 12, 5.0, 0.48);
+            }
+            (Sky::Rain, _) => {
+                self.clouds(st, now, s, 3, 0xeef1f5, 0.75, 0.0, 0.3);
+                self.rain(st, now, s, 26, 9.0, 0.6);
+            }
+            (Sky::Thunder, _) => {
+                // Lightning: the clouds light up from inside, twice.
+                let period = 4.5 + 3.0 * hash(st.seed + 5);
+                let ph = (now + period * hash(st.seed + 6)).rem_euclid(period);
+                let flash = (1.0 - ph / 0.18).max(0.0) + 0.7 * (1.0 - ((ph - 0.32).abs() / 0.1)).max(0.0);
+                if flash > 0.0 {
+                    let fx = r.left + w * (0.25 + 0.5 * hash(st.seed + (now / period) as u32));
+                    self.glow(fx, r.top + h * 0.2, w * 0.9, h * 1.1, color(0xffffff, 0.85 * flash.min(1.0) * st.fade(fx)));
+                }
+                self.clouds(st, now, s, 3, 0xe6e4f0, 0.8, 0.0, 0.3);
+                self.rain(st, now, s, 30, 10.0, 0.62);
+            }
+            (Sky::Snow, _) => {
+                self.clouds(st, now, s, 2, 0xffffff, 0.7, 0.0, 0.3);
+                for j in 0..22u32 {
+                    let q = st.seed * 37 + j * 11;
+                    let speed = (10.0 + 14.0 * hash(q)) * s;
+                    let fall = h + 8.0 * s;
+                    let y = r.top - 4.0 * s + (hash(q + 1) * fall + now * speed).rem_euclid(fall);
+                    let x = r.left + w * hash(q + 2) + 5.0 * s * (now * (0.6 + 0.8 * hash(q + 3)) + 6.3 * hash(q + 4)).sin();
+                    let z = (1.3 + 1.5 * hash(q + 5)) * s;
+                    let f = st.fade(x);
+                    self.glow(x, y, z * 2.2, z * 2.2, color(0x8ea5c6, 0.5 * f));
+                    self.glow(x, y, z, z, color(0xffffff, 1.0 * f));
+                }
+            }
         }
     }
 }

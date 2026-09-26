@@ -224,6 +224,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             });
             LRESULT(0)
         }
+        // The weather skin's next frame.
+        WM_TIMER if wp.0 == ime_candui::ANIM_TIMER => {
+            guard((), || {
+                with_win(|win| {
+                    let notes = RefCell::new(Vec::new());
+                    per_monitor(|| win.canvas.tick(hwnd, &|m: &str| notes.borrow_mut().push(m.to_string())));
+                    win.notes.extend(notes.into_inner());
+                })
+            });
+            LRESULT(0)
+        }
         WM_TIMER if wp.0 == FLASH_TIMER => {
             guard((), || {
                 with_win(|win| {

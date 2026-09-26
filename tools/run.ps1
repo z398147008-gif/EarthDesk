@@ -25,6 +25,16 @@ Write-Host "    - 关掉这个黑窗口 = 关掉程序" -ForegroundColor Gray
 Write-Host ""
 
 Set-Location (Join-Path $PSScriptRoot "..")
+# 先和 GitHub 同步,保证运行的是最新代码(没联网时用本地代码继续)。
+& (Join-Path $PSScriptRoot "sync.ps1") -Push
+if ($LASTEXITCODE -eq 1) {
+    Write-Host ""
+    Write-Host "  和 GitHub 同步失败,停止运行。把上面的提示截图发给我。" -ForegroundColor Yellow
+    Read-Host "`n按回车关闭"
+    exit 1
+}
+Write-Host ""
+
 # 打包配置里引用了硬件监控服务的文件,缺了会编译失败,所以试运行也先准备好。
 & (Join-Path $PSScriptRoot "build-sensors.ps1")
 # 输入法也一样(只编译,不注册;想试用输入法请双击 5-试用输入法.bat)。

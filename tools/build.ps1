@@ -20,6 +20,16 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 $root = Join-Path $PSScriptRoot ".."
 Set-Location $root
 
+# 先和 GitHub 同步,保证打包的是最新代码(没联网时用本地代码继续)。
+& (Join-Path $PSScriptRoot "sync.ps1") -Push
+if ($LASTEXITCODE -eq 1) {
+    Write-Host ""
+    Write-Host "  和 GitHub 同步失败,停止打包。把上面的提示截图发给我。" -ForegroundColor Yellow
+    Read-Host "`n按回车关闭"
+    exit 1
+}
+Write-Host ""
+
 # 内置的硬件监控服务(温度、风扇、显卡):先编译好,打包时会一起装进去。
 & (Join-Path $PSScriptRoot "build-sensors.ps1")
 if ($LASTEXITCODE -ne 0) {

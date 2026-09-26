@@ -236,7 +236,7 @@ LibreHardwareMonitor 的库(LibreHardwareMonitorLib.dll,原样随附):
 - 按程序默认英文（游戏、终端…）、每页候选数、Emoji、快捷短语（`custom_phrase_double.txt`）在设置页里改。
 - 打字时文字里带下划线的是按下的字母（Enter 原样上屏），候选窗第一行是「字母 · 双拼读音」（`rjhz ran hou`）；词库里没有的英文词作为「英」排在候选最后，候选窗不会在打英文时消失。
 - 程序自己中途结束了组字（网页类程序换行后重绘输入框时会这样），留在文字里的拼写不会变成正文：光标还在它后面时下一个键接着组字（`tsf/src/edit.rs` 的 `Orphan`）。
-- **候选窗皮肤**（设置页「外观」，切换不需要重新部署）：跟随系统；**天气**——候选条从左到右画出现在和之后每小时的天气（晴、云、雨、雪、雾、雷），越长看得越远，角上是气温和「小雨转晴」，数据是地球桌面拉到的 Open-Meteo 天气（写到 `%APPDATA%\EarthDesk\ime\weather.json`）；**时段**——颜色随一天慢慢变（清晨桃粉、上午清蓝、正午暖白、下午琥珀、傍晚珊瑚到淡紫、夜里浅蓝紫），始终是浅色。
+- **候选窗皮肤**（设置页「外观」，切换不需要重新部署）：跟随系统；**天气**——候选条从左到右是现在和之后每小时的天气，而且是动的：阳光呼吸、光线缓缓转动，云慢慢飘，雨往下落，雪边飘边落，雾一层层流过，雷雨时云里闪电，晴夜星星闪、偶尔划过流星（约每秒 25 帧，只在候选窗显示时画；Windows 关掉「动画效果」时静止），越长看得越远，角上是气温和「小雨转晴」，数据是地球桌面拉到的 Open-Meteo 天气（写到 `%APPDATA%\EarthDesk\ime\weather.json`）；**时段**——颜色随一天慢慢变（清晨桃粉、上午清蓝、正午暖白、下午琥珀、傍晚珊瑚到淡紫、夜里浅蓝紫），始终是浅色。
 - 图标：输入法是蓝底白「中」（`ime/ime.ico`），托盘是单独画的小地球（`src-tauri/icons/tray-*.png`），源文件都在 `src-tauri/icons/src/*.svg`。
 - **组成**：`ime/` 是独立的 Cargo 工作区，三个 crate ——
   - `proto`：DLL 和引擎之间的管道协议（长度前缀 + JSON）；
@@ -244,6 +244,7 @@ LibreHardwareMonitor 的库(LibreHardwareMonitorLib.dll,原样随附):
   - `engine`：`EarthDeskIME.exe`，每个登录会话一个、普通权限，持有 librime、用户词库和候选窗（分层窗口 + Direct2D，跟随系统深浅色）。管道只接受本用户和沙盒（UWP）程序。
 - 用户数据在 `%APPDATA%\EarthDesk\ime\`（`rime\` 词库与部署结果、`settings.json`、`ime.log`），只在本机。
 - 安装包里的 `ime\EarthDeskIME.exe --register --enable --deploy` 注册两个 DLL、加到当前用户的键盘列表、部署词库；卸载时 `--disable --unregister`。开发时双击 `5-试用输入法.bat`（编译、弹一次 UAC 注册、部署）。
+- `2-运行` / `3-打包` 开始前先和 GitHub 同步（`tools/sync.ps1`：记下本地改动 → 拉取合并 main → 上传），并打印这次用的代码版本；GitHub 上有没合并进 main 的 `claude/...` 分支时会提醒。
 - 编译：`tools/build-ime.ps1`（`2-运行` / `3-打包` 会自动调用），第三方文件由 `tools/fetch-ime.ps1` 下载到 `src-tauri/vendor/ime/`。
 - **日语 / 中日混合**（第二阶段）：日语用 [Mozc](https://github.com/google/mozc) 的转换引擎，编成 `earthdesk_mozc.dll` 在引擎进程里直接调用（`ime/mozc/earthdesk_mozc.cc`，协议就是 Mozc 自己的 `commands::Command` protobuf，不经过 mozc_server）。GitHub Actions（`.github/workflows/mozc.yml`）在 Windows 上编译并发布到 Release `mozc-13c9898`，`tools/build-ime.ps1` 下载；下载不到时输入法只有中文。
   - 默认**中日混合**：同一串字母同时交给双拼（Rime）和罗马字（Mozc），`engine/src/mixed.rs` 分三层决定谁在前：拼不拼得通 → 是不是完整的词（双拼半个音节 vs 罗马字读完）→ 上一次上屏的语言和这串字母以前选过哪边（`%APPDATA%\EarthDesk\ime\langpref.json`）。日语候选标「日」，日语领先时空格进入 Mozc 的转换（分段、换候选、Enter 上屏）。

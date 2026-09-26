@@ -155,6 +155,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             });
             LRESULT(0)
         }
+        // The weather skin's next frame.
+        WM_TIMER if wp.0 == ime_candui::ANIM_TIMER => {
+            CANVAS.with(|c| {
+                if let Some(c) = c.borrow_mut().as_mut() {
+                    c.tick(hwnd, &log);
+                }
+            });
+            LRESULT(0)
+        }
         WM_TIMER if wp.0 == FLASH_TIMER => {
             let _ = KillTimer(Some(hwnd), FLASH_TIMER);
             if let Ok(mut s) = SHARED.lock() {
