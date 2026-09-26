@@ -175,6 +175,21 @@ pub fn utf16_index(s: &str, byte: usize) -> u32 {
     s[..b].encode_utf16().count() as u32
 }
 
+/// A commit ending in an opening mark gets its partner, the caret going
+/// between them. Only marks we put in ourselves (full-width ones): what a
+/// program gets straight from the keyboard is left to it (code editors
+/// pair their own ASCII brackets).
+pub fn add_pair(st: &mut State) {
+    if st.preedit.is_some() {
+        return;
+    }
+    let Some(close) = st.commit.as_ref().and_then(|c| c.chars().last()).and_then(ime_proto::closer_of) else { return };
+    if let Some(c) = st.commit.as_mut() {
+        c.push(close);
+    }
+    st.caret_back = close.len_utf16() as u32;
+}
+
 /// Rime's input while nothing of it has been picked yet (only letters).
 fn typed_letters(snap: &Snapshot) -> Option<&str> {
     let pre = &snap.preedit.as_ref()?.0;
@@ -221,6 +236,13 @@ impl Engine {
         // Derived again each time: the hour moves on.
         l.skin = make_skin(l.kind.as_deref().unwrap_or(""), l.weather.as_ref(), now_secs());
         l.skin.clone()
+    }
+
+    /// （ typed: put in （） with the caret between (settings: auto_pair).
+    fn pair(&self, st: &mut State) {
+        if self.settings.lock().map(|s| s.auto_pair).unwrap_or(true) {
+            add_pair(st);
+        }
     }
 
     /// Put the current skin on a window about to be shown.
@@ -298,6 +320,7 @@ impl Engine {
             }),
             ascii: snap.ascii,
             delete_before: 0,
+            caret_back: 0,
             cands: None,
         }
     }
@@ -418,6 +441,7 @@ impl Engine {
                 }
                 let Some(s) = g.sessions.get_mut(&session) else { return Reply::Error { message: "no such session".into() } };
                 let (mut state, ui) = self.key(s, session, keycode, mask);
+                self.pair(&mut state);
                 let (cands, ui) = Self::route(s.draws, self.dress(ui));
                 state.cands = cands;
                 let caret = s.caret;
@@ -660,6 +684,25 @@ mod tests {
         assert_eq!(make_skin("weather", Some(&w), 10_000 + 3 * 3600).hours[0].0, 0);
         // Too old: no weather.
         assert!(make_skin("weather", Some(&w), 10_000 + 7 * 3600).hours.is_empty());
+    }
+
+    #[test]
+    fn pairs() {
+        use super::add_pair;
+        use ime_proto::{Preedit, State};
+        let mut st = State { eaten: true, commit: Some("你好（".into()), ..Default::default() };
+        add_pair(&mut st);
+        assert_eq!((st.commit.as_deref(), st.caret_back), (Some("你好（）"), 1));
+        // Closers and plain text stay as they are.
+        for c in ["）", "你好", "("] {
+            let mut st = State { eaten: true, commit: Some(c.into()), ..Default::default() };
+            add_pair(&mut st);
+            assert_eq!((st.commit.as_deref(), st.caret_back), (Some(c), 0));
+        }
+        // Still composing (a partial pick): not yet.
+        let mut st = State { eaten: true, commit: Some("「".into()), preedit: Some(Preedit { text: "hao".into(), cursor: 3 }), ..Default::default() };
+        add_pair(&mut st);
+        assert_eq!(st.caret_back, 0);
     }
 
     #[test]

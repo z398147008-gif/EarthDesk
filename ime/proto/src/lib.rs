@@ -84,12 +84,39 @@ pub struct Settings {
     /// theme, "weather" paints the coming hours' weather along the bar,
     /// "time" tints it by the time of day. Applied without a redeploy.
     pub skin: String,
+    /// An opening bracket or quote brings its partner: （ gives （|）.
+    pub auto_pair: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { page_size: 7, emoji: false, shift_toggle: true, ascii_apps: Vec::new(), mixed: true, skin: String::new() }
+        Settings { page_size: 7, emoji: false, shift_toggle: true, ascii_apps: Vec::new(), mixed: true, skin: String::new(), auto_pair: true }
     }
+}
+
+/// Opening marks the input method puts in with their partner (auto_pair).
+pub const PAIRS: &[(char, char)] = &[
+    ('（', '）'),
+    ('【', '】'),
+    ('「', '」'),
+    ('『', '』'),
+    ('《', '》'),
+    ('〈', '〉'),
+    ('〔', '〕'),
+    ('｛', '｝'),
+    ('［', '］'),
+    ('“', '”'),
+    ('‘', '’'),
+];
+
+/// The partner of an opening mark.
+pub fn closer_of(c: char) -> Option<char> {
+    PAIRS.iter().find(|p| p.0 == c).map(|p| p.1)
+}
+
+/// Is this a closing mark of a pair?
+pub fn is_closer(c: char) -> bool {
+    PAIRS.iter().any(|p| p.1 == c)
 }
 
 impl Settings {
@@ -240,6 +267,10 @@ pub struct State {
     /// ひらがな / カタカナ). Older DLLs ignore it.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub delete_before: u32,
+    /// After inserting `commit`, put the caret this many UTF-16 units back
+    /// (between a pair of brackets typed as one: （|）). Older DLLs ignore it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub caret_back: u32,
     /// Only for sessions whose DLL draws the candidates (`Hello::draws`):
     /// what the candidate window should do now. None = leave it as it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -378,7 +409,7 @@ mod tests {
         write_frame(&mut buf, &r).unwrap();
         let back: Request = read_frame(&mut buf.as_slice()).unwrap();
         assert_eq!(r, back);
-        let s = Reply::State(State { eaten: true, commit: Some("你好".into()), preedit: None, ascii: false, delete_before: 0, cands: None });
+        let s = Reply::State(State { eaten: true, commit: Some("你好".into()), preedit: None, ascii: false, delete_before: 0, caret_back: 0, cands: None });
         let mut buf = Vec::new();
         write_frame(&mut buf, &s).unwrap();
         assert_eq!(read_frame::<_, Reply>(&mut buf.as_slice()).unwrap(), s);
@@ -398,6 +429,9 @@ mod tests {
         assert_eq!(s.page_size, 5);
         assert!(s.shift_toggle);
         assert!(s.skin.is_empty());
+        assert!(s.auto_pair);
+        assert_eq!(closer_of('（'), Some('）'));
+        assert!(is_closer('」') && !is_closer('（'));
         let t = Settings { skin: "weather".into(), ..s.clone() };
         assert!(t.same_but_skin(&s) && t != s);
         assert!(!Settings { page_size: 6, ..s.clone() }.same_but_skin(&s));

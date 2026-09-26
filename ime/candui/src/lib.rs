@@ -270,8 +270,10 @@ pub struct Canvas {
 
 /// The timer a window drawn by a `Canvas` must hand to `Canvas::tick`.
 pub const ANIM_TIMER: usize = 0x4544;
-/// About 25 frames a second: smooth rain, little work.
-const FRAME_MS: u32 = 40;
+/// About 60 frames a second. Windows timers tick every 15.6 ms and round
+/// up to whole ticks, so 15 ms is one tick a frame (64 fps) where 16 would
+/// be two (32 fps). The weather moves by the clock, not by frames.
+const FRAME_MS: u32 = 15;
 
 /// Windows' "show animations" setting (off: the weather stands still).
 fn motion_allowed() -> bool {

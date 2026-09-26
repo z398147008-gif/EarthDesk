@@ -77,14 +77,25 @@ unsafe fn before_caret(ctx: &ITfContext, ec: u32, text: &[u16]) -> Option<ITfRan
     if !sel.IsEmpty(ec).ok()?.as_bool() {
         return None;
     }
+    // Some pages put a space after text the moment it is typed (while it
+    // should still be composing): allow a few spaces between it and the
+    // caret, and take them into the composition (they then go).
+    const SLACK: usize = 3;
     let r = sel.Clone().ok()?;
-    let n = text.len() as i32;
+    let want = (text.len() + SLACK) as i32;
     let mut moved = 0i32;
-    r.ShiftStart(ec, -n, &mut moved, std::ptr::null()).ok()?;
-    if moved != -n {
+    r.ShiftStart(ec, -want, &mut moved, std::ptr::null()).ok()?;
+    let got = range_text(ec, &r, want as usize + 2).ok()?;
+    let is_space = |u: &u16| matches!(*u, 0x20 | 0xA0 | 0x3000);
+    let end = got.len() - got.iter().rev().take_while(|u| is_space(u)).count();
+    if end < text.len() || got.len() - end > SLACK || got[end - text.len()..end] != *text {
         return None;
     }
-    (range_text(ec, &r, text.len() + 2).ok()? == text).then_some(r)
+    // Start the range at the text itself.
+    let skip = (end - text.len()) as i32;
+    let mut m = 0i32;
+    r.ShiftStart(ec, skip, &mut m, std::ptr::null()).ok()?;
+    Some(r)
 }
 
 pub enum Found {
@@ -226,11 +237,20 @@ impl Apply {
                         let _ = p.Clear(ec, &range);
                     }
                     range.Collapse(ec, TF_ANCHOR_END)?;
+                    back(ec, &range, self.state.caret_back);
                     set_caret(ctx, ec, &range)?;
                     c.EndComposition(ec)?;
                 }
                 None => {
                     let range = selection_range(ctx, ec)?;
+                    // A closing mark right where one already is (the
+                    // partner we put in with its opening one): step over it.
+                    if self.state.delete_before == 0 && self.state.caret_back == 0 {
+                        if let Some(next) = closer_ahead(ec, &range, text) {
+                            set_caret(ctx, ec, &next)?;
+                            return self.finish_preedit(ec, comp);
+                        }
+                    }
                     if self.state.delete_before > 0 {
                         // Replace the word we committed just before.
                         let mut moved = 0i32;
@@ -238,11 +258,18 @@ impl Apply {
                     }
                     range.SetText(ec, 0, &wide)?;
                     range.Collapse(ec, TF_ANCHOR_END)?;
+                    back(ec, &range, self.state.caret_back);
                     set_caret(ctx, ec, &range)?;
                 }
             }
         }
 
+        self.finish_preedit(ec, comp)
+    }
+
+    /// The preedit part of the edit (after any commit).
+    unsafe fn finish_preedit(&self, ec: u32, comp: &mut Option<ITfComposition>) -> Result<()> {
+        let ctx = &self.context;
         match &self.state.preedit {
             Some(p) if !p.text.is_empty() => {
                 if comp.is_none() {
@@ -287,6 +314,35 @@ impl Apply {
         }
         Ok(())
     }
+}
+
+/// Collapsed `range` moved `n` UTF-16 units back (between a pair).
+unsafe fn back(ec: u32, range: &ITfRange, n: u32) {
+    if n == 0 {
+        return;
+    }
+    let mut moved = 0i32;
+    let _ = range.ShiftStart(ec, -(n as i32), &mut moved, std::ptr::null());
+    let _ = range.Collapse(ec, TF_ANCHOR_START);
+}
+
+/// `text` is one closing mark and the document has that same mark right
+/// after the selection: the caret position past it.
+unsafe fn closer_ahead(ec: u32, sel: &ITfRange, text: &str) -> Option<ITfRange> {
+    let mut chars = text.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else { return None };
+    if !ime_proto::is_closer(c) || !sel.IsEmpty(ec).ok()?.as_bool() {
+        return None;
+    }
+    let next = sel.Clone().ok()?;
+    let mut moved = 0i32;
+    next.ShiftEnd(ec, c.len_utf16() as i32, &mut moved, std::ptr::null()).ok()?;
+    let want: Vec<u16> = text.encode_utf16().collect();
+    if range_text(ec, &next, want.len() + 1).ok()? != want {
+        return None;
+    }
+    next.Collapse(ec, TF_ANCHOR_END).ok()?;
+    Some(next)
 }
 
 /// Apply `state` to `context`. Inside key handling we ask for the edit

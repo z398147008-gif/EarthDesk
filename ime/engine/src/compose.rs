@@ -247,7 +247,7 @@ fn chain(first: State, then: State) -> State {
         (Some(a), Some(b)) => Some(a + &b),
         (a, b) => a.or(b),
     };
-    State { eaten: true, commit, preedit: then.preedit, ascii: then.ascii, delete_before: first.delete_before, cands: None }
+    State { eaten: true, commit, preedit: then.preedit, ascii: then.ascii, delete_before: first.delete_before, caret_back: 0, cands: None }
 }
 
 impl Engine {

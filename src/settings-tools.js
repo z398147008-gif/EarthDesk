@@ -1045,6 +1045,7 @@ function renderIme() {
   const typing = card(
     row("每页候选个数", "", slider(st.page_size, 3, 9, 1, (v) => `${v} 个`, (v) => { st.page_size = v; imeSave(); })),
     row("Shift 切换中 / 英", "单按 Shift：把已经打的字母原样上屏并切到英文，再按一次回到中文", switchEl(st.shift_toggle, (on) => { st.shift_toggle = on; imeSave(); })),
+    row("括号、引号成对输入", "打出 （ 【 「 《 “ 这类符号时自动补上另一半，光标停在中间；再打右半边时直接跳过已经补上的那个", switchEl(st.auto_pair !== false, (on) => { st.auto_pair = on; imeSave(); })),
     row("Emoji 候选", "打「xiao」时在候选里给出 😄 之类", switchEl(st.emoji, (on) => { st.emoji = on; imeSave(); })),
     row("中日英混合输入", "不用切换：同一串字母同时按双拼、罗马字和英文单词解析，按词库和上下文把候选排在一起（日语标「日」、英文标「英」，句首英文自动大写）。关掉后默认只打中文，仍可用 /ja 或 Ctrl+Shift+J 切到日语", switchEl(st.mixed !== false, (on) => { st.mixed = on; imeSave(); }))
   );
