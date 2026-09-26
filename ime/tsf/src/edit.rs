@@ -149,6 +149,12 @@ pub fn writable(ctx: &ITfContext) -> bool {
     !compartment_on(ctx, &GUID_COMPARTMENT_KEYBOARD_DISABLED) && !compartment_on(ctx, &GUID_COMPARTMENT_EMPTYCONTEXT)
 }
 
+/// Chrome's empty document (Windows 11), where it points the keyboard
+/// while the page has no text field focused.
+pub fn is_empty_doc(ctx: &ITfContext) -> bool {
+    compartment_on(ctx, &GUID_COMPARTMENT_EMPTYCONTEXT)
+}
+
 fn compartment_on(ctx: &ITfContext, guid: &windows::core::GUID) -> bool {
     unsafe {
         let Ok(cm) = ctx.cast::<ITfCompartmentMgr>() else { return false };
